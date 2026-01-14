@@ -1,0 +1,1490 @@
+---
+title: "01_bb_validation"
+author: "Jenny Katz"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3   # Customize the depth of the table of contents for HTML document
+    toc_float:
+      collapsed: true    # Start with the table of contents expanded
+      smooth_scroll: true  # Enable smooth scrolling
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding,
+  output_dir = "knitted files", output_format = "all") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 0: Read Libraries and connect to Sharepoint
+
+```{r}
+erstools::ers_load_packages() 
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+
+#bring in pub available data
+nces_data <- read_excel("NCES Data for BB Districts.xlsx")
+```
+
+# Part 1: Update Variables
+
+```{r}
+
+#1. folder path to data
+raw_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/0.%20Data%20Received/"
+
+#2. district folder
+district_folder <-"Cleveland"
+
+#3. file names 
+budgeted_positions_file <- "Employee Information.xlsx"
+school_file <- "School Information - Characteristics.xlsx"
+enrollment_file <-"Student Information - Enrollment.xlsx"
+location_crosswalk_file <-"location_crosswalk_(ers_created).csv"
+
+#4.District & Project INfo
+LEAID = "3904378" #Open up nces_data to find
+project_year = "2025"
+project = "Budget Benchmarking 2025"
+
+```
+
+# Part 2: Bring in Data
+
+## Budgeted Positions
+
+```{r}
+#4.Bring in files 
+#budgeted positions
+budgeted_positions_raw <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder),
+                   file_name_with_extension = budgeted_positions_file, skip_rows = 5)
+
+```
+
+## Location Crosswalks
+
+```{r}
+location_crosswalk <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder),
+                   file_name_with_extension = location_crosswalk_file)
+```
+
+# Part 3: Clean Up Budgeted Positions
+
+## 3.0 Column Mapping
+
+```{r}
+
+#    # Keep ERS names exactly as is - fill with NAs if missing
+library(dplyr)
+budgeted_positions_raw <- budgeted_positions_raw %>% 
+  mutate(
+
+    #Project INfo
+    H_record_ID = row_number(),
+    H_district = district_folder,
+    H_LEAID = LEAID,
+    H_project_year = project_year,
+    H_project = project,
+    
+    #FTE
+    D_employee_id = `Employee ID`, #critical
+    D_empl_fte = `FTE`, #critical
+   
+    
+    #account codes
+    D_activity_code     = NA_character_,
+    D_allocation_code = NA_character_,
+    D_class_code   = NA_character_,
+    D_cost_center_code  = NA_character_,
+    D_fund_code    = NA_character_, #critical
+    D_funct_code   = NA_character_,
+    D_dept_code         = NA_character_,
+    D_location_code      = "TO FIX", #critical
+    D_position_type_code    = NA_character_,
+    D_position_title_code    = `Position ID`,
+    D_object_code  = NA_character_,
+    D_program_code = NA_character_,
+    D_project_code = NA_character_,
+    
+    #account descriptions
+    D_activity_desc     = NA_character_,
+    D_allocation_desc  = NA_character_,
+    D_class_desc   = NA_character_,
+    D_cost_center_desc  = `Cost Center`,
+    D_fund_desc    = NA_character_,
+    D_funct_desc   = NA_character_,
+    D_dept_desc    = `Cost Center Hierarchy`, 
+    D_location_desc = `Location`, #critical
+    D_position_type_desc     = `Job Family Groups`, 
+    D_position_title_desc    = `Job Profile`, #critical
+    D_object_desc  = NA_character_,
+    D_program_desc = NA_character_,
+    D_project_desc = NA_character_,
+  
+    
+   #other disrict specific fields to add... update as needed
+    D_other_1 =  `Created Moment`,
+    D_other_2 =  `Unions All`,
+    D_other_3 =  `Position Status`,
+    D_other_4 =  NA_character_,
+    
+     .keep = "none"
+   
+  ) %>%
+ select(where(~ !all(is.na(.x))))
+
+```
+
+```{r}
+
+budgeted_positions_raw <- budgeted_positions_raw %>% 
+  filter(D_position_title_code != "Grand Total")
+
+
+```
+
+## bring in location crosswalk
+
+```{r}
+
+#add locations by detailed location desc
+budgeted_positions_raw <- budgeted_positions_raw %>%
+mutate(H_location_desc_clean = str_trim(
+      str_replace(D_cost_center_desc, "^\\d{4}CC\\s*", "")
+      ),
+  D_location_code = case_when(
+  H_location_desc_clean == "Facing History New Tech High School" ~ "0174CC",
+  H_location_desc_clean == "Cleveland Remote High School" ~ "0111CC",
+  H_location_desc_clean == "Davis Aerospace and Maritime High School" ~ "0326CC",
+  D_location_desc == "Adlai E Stevenson" ~ "0004CC",
+  D_location_desc == "Albert B Hart" ~ "0184CC",
+  D_location_desc == "Alfred A Benesch" ~ "0076CC",
+  D_location_desc == "Almira" ~ "0012CC",
+  D_location_desc == "Andrew J Rickoff" ~ "0016CC",
+  D_location_desc == "Anton Grdina" ~ "0021CC",
+  D_location_desc == "Artemus Ward" ~ "0023CC",
+  D_location_desc == "Bard High School Early College" ~ "0209CC",
+  D_location_desc == "Benjamin Franklin" ~ "0036CC",
+  D_location_desc == "Bolton" ~ "0041CC",
+  D_location_desc == "Buhrer Dual Language" ~ "0064CC",
+  D_location_desc == "Campus International (K-8)" ~ "0102CC",
+  D_location_desc == "Campus International HS" ~ "0282CC",
+  D_location_desc == "Charles Mooney-Facing History New Tech High School" ~ "0080CC",
+  D_location_desc == "Charles Dickens" ~ "0077CC",
+  D_location_desc == "Clara E Westropp" ~ "0090CC",
+  D_location_desc == "Clark" ~ "0088CC",
+  D_location_desc == "Davis/Digital Arts Campus" ~ "0208CC",
+  D_location_desc == "Cleveland School of the Arts" ~ "0801CC",
+  D_location_desc == "Collinwood High School" ~ "0096CC",
+  D_location_desc == "Daniel E Morgan" ~ "0109CC",
+  D_location_desc == "Denison" ~ "0112CC",
+  D_location_desc == "Dike School of the Arts" ~ "0124CC",
+  D_location_desc == "Douglas MacArthur Girls Leadership Academy" ~ "0130CC",
+  D_location_desc == "East Clark" ~ "0148CC",
+  D_location_desc == "East Tech/New Tech East" ~ "0161CC",
+  D_location_desc == "Euclid Park" ~ "0168CC",
+  D_location_desc == "Franklin D Roosevelt" ~ "0172CC",
+  D_location_desc == "Garfield" ~ "0188CC",
+  D_location_desc == "Garrett Morgan" ~ "0802CC",
+  D_location_desc == "Garrett Morgan School of Leadership and Innovation" ~ "0030CC",
+  D_location_desc == "George Washington Carver" ~ "0198CC",
+  D_location_desc == "Ginn Academy" ~ "0805CC",
+  D_location_desc == "Glenville High School" ~ "0220CC",
+  D_location_desc == "Halle" ~ "0224CC",
+  D_location_desc == "Hannah Gibbons" ~ "0229CC",
+  D_location_desc == "Harvey Rice" ~ "0240CC",
+  D_location_desc == "John Adams High School" ~ "0268CC",
+  D_location_desc == "JFK" ~ "0285CC",
+  D_location_desc == "Joseph M Gallagher" ~ "0279CC",
+  D_location_desc == "Kenneth W Clement Boys Leadership Academy" ~ "0297CC",
+  D_location_desc == "Louisa May Alcott" ~ "0340CC",
+  D_location_desc == "Luis Munoz Marin" ~ "0328CC",
+  D_location_desc == "Marion C Seltzer" ~ "0353CC",
+  D_location_desc == "Marion-Sterling" ~ "0354CC",
+  D_location_desc == "Mary B Martin" ~ "0347CC",
+  D_location_desc == "Mary Church Terrell School" ~ "0338CC",
+  D_location_desc == "Mary M Bethune" ~ "0350CC",
+  D_location_desc == "Max S Hayes High School" ~ "0349CC",
+  D_location_desc == "MC2STEM Cleveland State University" ~ "0035CC",
+  D_location_desc == "MC2STEM Great Lakes Science Center" ~ "0035CC",
+  D_location_desc == "MC2STEM Tri-C" ~ "0035CC",
+  D_location_desc == "Memorial" ~ "0027CC",
+  D_location_desc == "Miles" ~ "0368CC",
+  D_location_desc == "Miles Park" ~ "0372CC",
+  D_location_desc == "Mound" ~ "0396CC",
+  D_location_desc == "Nathan Hale" ~ "0411CC",
+  D_location_desc == "Natividad Pagan International Newcomers Academy" ~ "0537CC",
+  D_location_desc == "New Tech West" ~ "0060CC",
+  D_location_desc == "Oliver H Perry" ~ "0428CC",
+  D_location_desc == "Orchard" ~ "0436CC",
+  D_location_desc == "Paul L Dunbar" ~ "0451CC",
+  D_location_desc == "Riverside" ~ "0485CC",
+  D_location_desc == "Robert H Jamison" ~ "0482CC",
+  D_location_desc == "Robinson G Jones" ~ "0487CC",
+  D_location_desc == "Scranton" ~ "0500CC",
+  D_location_desc == "Stephanie Tubbs Jones School" ~ "0448CC",
+  D_location_desc == "Stonebrook-White" ~ "0376CC",
+  D_location_desc == "Stonebrook Montessori" ~ "0376CC",
+  D_location_desc == "Sunbeam" ~ "0532CC",
+  D_location_desc == "Tremont Montessori" ~ "0544CC",
+  D_location_desc == "Valley View Boys Leadership Academy" ~ "0550CC",
+  D_location_desc == "Wade Park" ~ "0556CC",
+  D_location_desc == "Warner Girls Leadership Academy" ~ "0572CC",
+  D_location_desc == "Waverly" ~ "0596CC",
+  D_location_desc == "Whitney M Young" ~ "0078CC",
+  D_location_desc == "Wilbur Wright" ~ "0616CC",
+  D_location_desc == "William Cullen Bryant" ~ "0622CC",
+  D_location_desc == "William Rainey Harper" ~ "0621CC",
+  D_location_desc == "Willson" ~ "0624CC",
+
+  ##now update ased on cost center
+  D_cost_center_desc == "0159CC Cleveland Early College High School" ~ "0159CC",
+  D_cost_center_desc == "0326CC Davis Aerospace and Maritime High School" ~ "0326CC",
+  D_cost_center_desc == "0111CC Cleveland Remote High School" ~ "0111CC",
+  D_cost_center_desc == "0110CC Cleveland Remote School K-8" ~ "0110CC",
+  D_cost_center_desc == "0692CC Cleveland School of Architecture & Design" ~ "0692CC",
+  D_cost_center_desc == "0691CC Cleveland School of Science and Medicine" ~ "0691CC",
+  D_cost_center_desc == "0300CC John Marshall School of Civic & Business Leadership" ~ "0300CC",
+ D_cost_center_desc == "0298CC John Marshall School of Engineering" ~ "0298CC",
+ D_cost_center_desc == "0299CC John Marshall School of Information Technology" ~ "0299CC",
+ D_cost_center_desc == "0333CC Lincoln-West School of Global Studies" ~ "0333CC",
+ D_cost_center_desc == "0334CC Lincoln-West School of Science & Health" ~ "0334CC",
+ D_cost_center_desc == "0245CC Rhodes College and Career Academy" ~ "0245CC",
+ D_cost_center_desc == "0243CC Rhodes Academy of Environmental Studies" ~ "0243CC",
+      TRUE ~ D_location_desc
+    ),
+#now clean up the location descriptions
+  D_location_desc = case_when(D_cost_center_desc %in% c("0159CC Cleveland Early College High School" ,
+  "0326CC Davis Aerospace and Maritime High School" ,
+ "0111CC Cleveland Remote High School",
+ "0110CC Cleveland Remote School K-8" ,
+  "0692CC Cleveland School of Architecture & Design",
+ "0691CC Cleveland School of Science and Medicine" ,
+  "0300CC John Marshall School of Civic & Business Leadership",
+  "0298CC John Marshall School of Engineering" ,
+ "0299CC John Marshall School of Information Technology" ,
+"0333CC Lincoln-West School of Global Studies" ,
+ "0334CC Lincoln-West School of Science & Health",
+ "0245CC Rhodes College and Career Academy",
+ "0243CC Rhodes Academy of Environmental Studies") ~ H_location_desc_clean,
+      TRUE ~ D_location_desc
+    )
+)
+#check unmatched locations
+budgeted_positions_raw %>%
+select(D_location_desc, D_location_code) %>%
+distinct()
+```
+
+## 3.1 Manual Checks
+
+-   Look at Data Validation table in OneNote and complete (right year, detailed enough, etc.)
+
+## 3.2 Review Table Structure
+
+```{r}
+#check number of columns/rows. 
+#does this seem right? 
+#ALso check for missing data and data types within the file
+ers_column_info(budgeted_positions_raw)
+```
+
+## 3.3. Remove Blank Rows/Columns
+
+This code block deletes any rows or columns made up fully of blank values ("", NA," ", etc.). These rows and columns wouldn't give you any additional info so it's best practice to take them out early on.
+
+```{r}
+
+#pre-check
+ncol(budgeted_positions_raw)
+nrow(budgeted_positions_raw)
+
+#remove empty rows and columns
+budgeted_positions_raw <- remove_empty(budgeted_positions_raw,
+                                 which = c("rows", "cols"))
+
+#post-check
+nrow(budgeted_positions_raw)
+ncol(budgeted_positions_raw)
+
+```
+
+## 3.4 Check for Duplicates/Remove
+
+If any rows are repetitive or not required for your analysis you can remove them. For example - you have multiple years of data but only need one.
+
+```{r}
+
+#Check for duplicates
+budgeted_positions_raw %>%
+  filter(!is.na(D_employee_id)) %>% 
+ get_dupes(-H_record_ID)
+
+```
+
+## 3.5 Review and modify column data types
+
+Review the data type of each column and modify if needed. Refer to the Data Dictionary for the correct data type for each column. For more information on different data types in R and why it matters, please refer to this: <https://app.tettra.co/teams/ersknowledge/pages/32-r-data-types>
+
+```{r}
+#review data type of each column
+#ALL Columns except FTE and record ID, should be charachter (this will make joining across tables easier)
+col_info <- data.frame(data_type = sapply(budgeted_positions_raw, class))
+print(col_info)
+
+
+
+#change data type of columns if needed (below is an example to convert to numeric values) - common functions are as.character, as.numeric, as.integer, as.Date
+
+#Created Moment set to charactet
+budgeted_positions_raw$D_other_1 <- as.character(budgeted_positions_raw$D_other_1)
+
+```
+
+# Part 4: FTE Adjustments
+
+Employees may have multiple positions or may work in multiple locations and have a FTE of 1 for each position. To get accurate FTE for each employee, project teams should adjust for this and split the FTE across positions/locations.
+
+## 4.0 Compare FTEs to NCES
+
+```{r}
+#compare total FTE in budgeted positions with NCES data
+public_data_comp_check <- nces_data %>%
+  left_join((budgeted_positions_raw %>%
+                group_by(H_LEAID) %>%
+              summarise(M_total_district_fte = sum(D_empl_fte, na.rm = TRUE))),
+              by = c("LEAID" = "H_LEAID")) %>%
+  mutate(M_fte_difference = M_total_district_fte  - `Total Staff FTE`)
+
+```
+
+## 4.1 Investigate FTES
+
+First investigate employees whose FTE sums over 1, so we can investigate why and make sure it's not a larger issue with data that we need to go back to district for
+
+```{r}
+
+#count of employees who have an sum of FTE over 1
+# 1) compute per-employee adjusted FTE 
+budgeted_positions_raw <- budgeted_positions_raw %>%
+  group_by(D_employee_id) %>%
+  mutate(H_fte_sum = sum(D_empl_fte, na.rm = TRUE)) %>%
+  ungroup() 
+
+
+#2) Review employees whose fte sums > 1
+budgeted_positions_raw %>%
+  select(D_employee_id,D_position_title_desc,D_location_desc,H_fte_sum) %>%
+  filter(H_fte_sum >1)
+
+#
+```
+
+## 4.2 Adjust FTEs
+
+If issue is not that big, that we can adjust the employee FTE Down
+
+```{r}
+#NOTE:  DO NOT ADJUST VACANT FTE DOWN IF THEY HAVE THE SAME EMPLOYEE ID (NA,0, 1, blanks)
+
+budgeted_positions_raw <- budgeted_positions_raw %>%
+  mutate(M_fte_adjusted = round(D_empl_fte, digits =  2))
+
+budgeted_positions_raw %>%
+  select(D_employee_id,D_position_title_desc,D_location_desc,M_fte_adjusted) %>%
+  filter(M_fte_adjusted >1)
+
+budgeted_positions_raw <- budgeted_positions_raw %>%
+  group_by(D_employee_id) %>%
+  mutate(
+    # total FTE across same job title & ID
+    total_fte = sum(M_fte_adjusted, na.rm = TRUE),
+    # count of rows in that group
+    n_rows = n(),
+    # adjust only if total_fte > 1, job titles are the same,
+    # and IDs are not in the excluded list
+    M_fte_adjusted = case_when(
+      !(is.na(D_employee_id)) &
+        total_fte > 1 ~ M_fte_adjusted / total_fte,
+      TRUE ~ M_fte_adjusted
+    )
+  ) %>%
+  ungroup() %>%
+  select(-H_fte_sum, -total_fte, -n_rows)
+
+
+
+# Some checks 
+  
+print(sum(budgeted_positions_raw$D_empl_fte, na.rm = TRUE))
+
+print(sum(budgeted_positions_raw$M_fte_adjusted, na.rm = TRUE))
+
+#2) Double Check that no adjusted FTES are greater than 1
+budgeted_positions_raw %>%
+  select(D_employee_id,D_position_title_desc,D_location_desc,M_fte_adjusted) %>%
+  filter(M_fte_adjusted >1)
+```
+
+# Part 6. Clean up Schools file
+
+## 6.1 Bring in School Data
+
+```{r}
+
+#schools files
+school_raw <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder),
+                   file_name_with_extension = school_file,
+                   skip_rows = 1)
+
+#enrollment file
+enrollment_raw <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder),
+                   file_name_with_extension = enrollment_file)
+
+
+```
+
+## CLEVELAND ONLY -MERGE
+
+```{r}
+#check umatched rows before merge
+
+unmatched_rows <- school_raw |> anti_join(enrollment_raw, by = c("Code" = "Cost Center"))
+
+# Show the number of unmatched rows
+nrow(unmatched_rows)
+
+# Preview unmatched rows
+head(unmatched_rows)
+
+
+#merge enrollment and school
+school_raw <- enrollment_raw |>
+  left_join(
+    school_raw |>
+      select(Code, Type),
+    by = c("Cost Center" = "Code")
+  )
+
+#fine the two schools that don't match are rolled up into MC2STEM so its okay
+```
+
+## 6.2 Map District Col to ERS Columns
+
+```{r}
+#changing column names and removing unneeded columns
+#replace the column names after the "=" with column names from your data.You can press tab after the = to select column names available in the data
+
+school_raw <- school_raw %>% 
+  mutate(
+    
+    #Project INfo
+    H_record_ID = row_number(),
+    H_district = district_folder,
+    H_LEAID = LEAID,
+    H_project_year = project_year,
+    H_project = project,
+    
+    #school info
+    D_location_code = `Cost Center`,
+    D_location_desc = `school name`,
+    D_school_level = `school level`,
+    D_school_type = `Type`,
+    D_grade_span = `gradespan`,
+    # These are actually NA's, replacing with 0's so the code wil run
+    D_enrollment_total = case_when(is.na(total_enrollment) ~ NA_real_,
+                                   is.na(pk) ~ total_enrollment,
+                                   TRUE ~ total_enrollment - pk),
+    D_preK_enrollment = pk,
+    D_ell_total = `Total ELL`,
+    D_frl_total =   case_when(is.na(total_enrollment) ~ NA_real_,
+                                   is.na(pk) ~ total_enrollment,
+                                   TRUE ~ total_enrollment - pk),
+    D_swd_total = `Total SPED All`,
+    D_self_contained = `Total Locked`,
+    
+    
+     .keep = "none"
+  )
+
+  
+
+```
+
+## 6.3 Update Data Type
+
+```{r}
+#review data type of each column
+#ALL Columns except FTE and record ID, should be charachter (this will make joining across tables easier)
+col_info <- data.frame(data_type = sapply(school_raw, class))
+print(col_info)
+
+
+
+#change data type of columns if needed (below is an example to convert to numeric values) - common functions are as.character, as.numeric, as.integer, as.Date
+
+#budgeted_positions_raw$D_empl_FTE <- as.numeric(budgeted_positions_raw$D_empl_FTE)
+```
+
+## 6.4 Review School Structure
+
+```{r}
+#check number of columns/rows. 
+#does this seem right? 
+#ALso check for missing data and data types within the file
+ers_column_info(school_raw)
+```
+
+## 6.5 Check /Remove Duplicate School
+
+### a. Investigate Dups
+
+```{r}
+
+#Check for duplicates
+school_raw %>%
+ get_dupes(-H_record_ID)
+
+#find shools with the same school ID
+duplicates_by_id <- school_raw  %>%
+  get_dupes(D_location_code)
+
+```
+
+### b. Remove Duplicates
+
+```{r}
+# No duplicates
+```
+
+## 6.6 Add Coding Columns
+
+### a. School Level
+
+```{r}
+#view school level
+school_raw %>%
+  group_by(D_school_level) %>%
+  count()
+
+#Update for your district's values 
+#No purely MS values in Cleveland
+school_raw <-school_raw %>%
+  mutate(C_school_level = case_when(D_school_level == "K8"	~ "ES",
+                                    D_school_level == "HS" ~ "HS",
+                                    TRUE ~ "Other"))
+#check coding
+school_raw %>%
+  group_by(D_school_level,C_school_level) %>%
+  count()
+
+```
+
+### b. Alternative School Flag
+
+```{r}
+# Will update crosswalks later, but so far these all look like traditional schools
+#NOTE THE MC2STEMS were NOt included in enrollment files nor was cleveland remote 
+
+# Maybe return to: Bard HS Early College, Cleveland Early College High School, New Tech West/East
+
+library(dplyr)
+
+school_raw <- school_raw |>
+  mutate(
+    C_school_flag = case_when(
+      D_location_desc == "Natividad Pagan International Newcomers Academy" ~ "Include: District-Wide Only",
+      D_location_desc == "Sunbeam" ~ "Include: District-Wide Only",
+      D_location_desc == "MC2STEM" ~ "Include: District-Wide Only",
+        D_location_desc == "MC2STEM Great Lakes Science Center" ~ "Include: District-Wide Only",
+      D_location_desc == "MC2STEM Tri-C" ~ "Include: District-Wide Only",
+      D_location_desc == "MC2STEM Cleveland State University" ~ "Include: District-Wide Only",
+      D_location_desc == "Cleveland Metro Remote School K-8" ~ "Include: District-Wide Only",
+      D_location_desc == "Cleveland Metro Remote School HS" ~ "Include: District-Wide Only",
+      TRUE ~ "Include: All"
+    )
+  )
+school_raw <- school_raw %>%
+  mutate(
+    C_school_flag_reason = case_when(
+      D_location_desc == "Natividad Pagan International Newcomers Academy" ~ "Alternative",
+      D_location_desc == "Sunbeam" ~ "Alternative",
+      D_location_desc == "MC2STEM Great Lakes Science Center" ~ "Alternative",
+      D_location_desc == "MC2STEM Tri-C" ~ "Alternative",
+      D_location_desc == "MC2STEM Cleveland State University" ~ "Alternative",
+      D_location_desc == "MC2STEM" ~ "Alternative",
+      D_location_desc == "Cleveland Metro Remote School K-8" ~ "Alternative",
+      D_location_desc == "Cleveland Metro Remote School HS" ~ "Alternative",
+      TRUE ~ "Neighborhood"
+    )
+  )
+
+#check coding
+school_raw %>%
+  group_by(C_school_flag) %>%
+  count()
+
+```
+
+### c. Enrollment Characteristics
+
+```{r}
+
+#Update for your district's values 
+school_raw <-school_raw %>%
+  mutate(C_school_level_mapped = case_when(C_school_level == "ES"	~ "ES",
+                                    C_school_level == "HS"	~ "SS",
+                                    TRUE ~ "Other"))
+
+school_raw %>%
+  group_by(C_school_level,C_school_level_mapped) %>%
+  count()
+
+
+#enrollment data not available for Cleveland
+# Keeping the code for now, but all these columns will be NA
+
+school_raw <- school_raw %>% 
+  mutate(C_school_size = ifelse(C_school_level == "ES", ifelse(D_enrollment_total < 350, "Small", "Not Small"), ifelse(D_enrollment_total < 500, "Small", "Not Small")))
+
+
+school_raw <- school_raw %>%
+  mutate(C_gen_ed = D_enrollment_total - D_self_contained,
+         M_ell_pct = D_ell_total / D_enrollment_total,
+         M_swd_pct = as.numeric(D_swd_total) / D_enrollment_total,
+         M_frl_pct = D_frl_total / D_enrollment_total)
+
+
+# Adding in sanity cleanups - you should manually check any huge variations
+school_raw <- school_raw %>%
+  mutate(M_ell_pct = ifelse(is.na(M_ell_pct), 0, ifelse(M_ell_pct > 1, 1, M_ell_pct)),
+         M_swd_pct = ifelse(is.na(M_swd_pct), 0, ifelse(M_swd_pct > 1, 1, M_swd_pct)),
+         M_frl_pct = ifelse(is.na(M_frl_pct), 0, ifelse(M_frl_pct > 1, 1, M_frl_pct)))
+
+```
+
+```{r}
+
+# Create all levels quartiles flags
+school_raw <- school_raw %>%
+  group_by(C_school_flag) %>%
+  mutate(
+    M_swd_quartile_flag = case_when(
+      M_swd_pct <= quantile(M_swd_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_swd_pct > quantile(M_swd_pct, 0.25, na.rm = TRUE) & M_swd_pct <= quantile(M_swd_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_swd_pct > quantile(M_swd_pct, 0.5, na.rm = TRUE) & M_swd_pct <= quantile(M_swd_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_swd_pct > quantile(M_swd_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+school_raw <- school_raw %>%
+  group_by(C_school_flag) %>%
+  mutate(
+    M_ell_quartile_flag = case_when(
+      M_ell_pct <= quantile(M_ell_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_ell_pct > quantile(M_ell_pct, 0.25, na.rm = TRUE) & M_ell_pct <= quantile(M_ell_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_ell_pct > quantile(M_ell_pct, 0.5, na.rm = TRUE) & M_ell_pct <= quantile(M_ell_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_ell_pct > quantile(M_ell_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+school_raw <- school_raw %>%
+  group_by(C_school_flag) %>%
+  mutate(
+    M_frl_quartile_flag = case_when(
+      M_frl_pct <= quantile(M_frl_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_frl_pct > quantile(M_frl_pct, 0.25, na.rm = TRUE) & M_frl_pct <= quantile(M_frl_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_frl_pct > quantile(M_frl_pct, 0.5, na.rm = TRUE) & M_frl_pct <= quantile(M_frl_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_frl_pct > quantile(M_frl_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+```
+
+```{r}
+
+# Create all levels quartiles flags
+school_raw <- school_raw %>%
+  group_by(C_school_flag, C_school_level_mapped) %>%
+  mutate(
+    M_swd_quartile_flag_sized = case_when(
+      M_swd_pct <= quantile(M_swd_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_swd_pct > quantile(M_swd_pct, 0.25, na.rm = TRUE) & M_swd_pct <= quantile(M_swd_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_swd_pct > quantile(M_swd_pct, 0.5, na.rm = TRUE) & M_swd_pct <= quantile(M_swd_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_swd_pct > quantile(M_swd_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+school_raw <- school_raw %>%
+  group_by(C_school_flag, C_school_level_mapped) %>%
+  mutate(
+    M_ell_quartile_flag_sized = case_when(
+      M_ell_pct <= quantile(M_ell_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_ell_pct > quantile(M_ell_pct, 0.25, na.rm = TRUE) & M_ell_pct <= quantile(M_ell_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_ell_pct > quantile(M_ell_pct, 0.5, na.rm = TRUE) & M_ell_pct <= quantile(M_ell_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_ell_pct > quantile(M_ell_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+school_raw <- school_raw %>%
+  group_by(C_school_flag, C_school_level_mapped) %>%
+  mutate(
+    M_frl_quartile_flag_sized = case_when(
+      M_frl_pct <= quantile(M_frl_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_frl_pct > quantile(M_frl_pct, 0.25, na.rm = TRUE) & M_frl_pct <= quantile(M_frl_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_frl_pct > quantile(M_frl_pct, 0.5, na.rm = TRUE) & M_frl_pct <= quantile(M_frl_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_frl_pct > quantile(M_frl_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+```
+
+```{r}
+
+# Validating the quartiles
+make_quartile_summary <- function(data, var, flag_var) {
+  cutoffs <- quantile(data[[var]], probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+  
+  counts <- data %>%
+    count(!!sym(flag_var)) %>%
+    rename(quartile = !!sym(flag_var), count = n)
+  
+  tibble(
+    metric = var,
+    q25 = cutoffs[1],
+    q50 = cutoffs[2],
+    q75 = cutoffs[3]
+  ) %>%
+    crossing(counts)
+}
+
+# build tables for each metric (only looking at traditional campuses)
+
+## Switch filters to small, not-small as needed
+data_testing <- school_raw %>% 
+  filter(C_school_flag == "Include: All") %>% 
+  filter(C_school_size == "Not Small")
+
+frl_summary <- make_quartile_summary(data_testing, "M_frl_pct", "M_frl_quartile_flag")
+swd_summary <- make_quartile_summary(data_testing, "M_swd_pct", "M_swd_quartile_flag")
+ell_summary <- make_quartile_summary(data_testing, "M_ell_pct", "M_ell_quartile_flag")
+
+# combine into one concise table
+quartile_summary <- bind_rows(frl_summary, swd_summary, ell_summary)
+
+print(quartile_summary)
+
+```
+
+## 6.7 Compare Enrollment to NCES
+
+```{r}
+public_data_comp_check <- public_data_comp_check %>%
+  left_join(
+    (school_raw %>%
+       group_by(H_LEAID) %>%
+       summarise(M_total_district_enrollment = sum(D_enrollment_total, na.rm = TRUE))),
+    by = c("LEAID" = "H_LEAID")
+  ) %>%
+  mutate(
+    M_enrollment_difference = M_total_district_enrollment - `Total Enrollment`
+  )
+```
+
+# Part 7: Position + Schools Crosswalk
+
+### b. Join Position & School Tables
+
+```{r}
+#Create a Detailed location crosswalk to update D_location_code in BUdgeted Positions File
+budgeted_positions_raw <- budgeted_positions_raw %>%
+  mutate(H_detailed_location_desc_helper = case_when(
+    str_detect(D_location_desc, "Admin") ~ "Administration",
+    TRUE ~ D_location_desc
+  ))
+```
+
+```{r}
+
+#Create Crosswalk 
+location_crosswalk <- bind_rows(
+   # --- Part 1: Prepare the Budget Positions Table ---
+ budgeted_positions_raw %>%
+  filter(!is.na(D_location_code)) %>%
+  count(D_location_code, D_location_desc, name = "row_count") %>% 
+  mutate( table = "Position") ,
+
+  # --- Part 2: Prepare the Schools Table ---
+  school_raw %>%
+    count(D_location_code, D_location_desc, name = "row_count") %>% 
+    mutate(table = "School")) %>%
+    
+    
+   #Keep only the first school name for each ID ---
+   #Keep only the first school name for each ID ---
+  group_by(D_location_code) %>%
+  arrange(desc(table)) %>%
+  mutate(D_location_desc = first(D_location_desc)) %>%
+  ungroup() %>%
+
+ #remove duplicates
+ group_by(D_location_code, D_location_desc, table) |>
+  summarize(row_count = sum(row_count, na.rm = TRUE), .groups = "drop") %>%
+
+  # --- Part 3: Pivot the Combined Table ---
+  pivot_wider(
+    names_from = table,
+    values_from = row_count,
+    values_fill = 0
+  ) %>%
+  arrange(D_location_desc) 
+
+
+
+
+#bring in Total FTE
+location_crosswalk <- location_crosswalk %>%
+  left_join(
+    budgeted_positions_raw %>%
+      group_by(D_location_code) %>%
+      summarise(M_total_FTE = sum(M_fte_adjusted)) %>%
+      filter(M_total_FTE > 0) %>%
+      filter(!is.na(D_location_code)) %>%
+      select(D_location_code, M_total_FTE),
+    by = "D_location_code"
+  )
+
+#Bring in Total Enrollment 
+location_crosswalk <- location_crosswalk %>%
+  left_join(
+    school_raw %>%
+      select(D_location_code, D_enrollment_total,D_school_type),
+    by = "D_location_code"
+  ) %>%
+  mutate(M_fte_per_500_students = M_total_FTE / D_enrollment_total * 500) %>%
+  arrange(desc(School))
+  
+
+
+
+#flag issues
+location_crosswalk <- location_crosswalk %>%
+  mutate(C_location_issue_flag = case_when(Position < 1 & School == 1 ~"Not In Position File",
+                                         School == 0 & Position > 0 ~ "Not In School File",
+                                         M_fte_per_500_students <40 | M_fte_per_500_students > 90 ~ "Low/High FTE per 500",
+                                         D_enrollment_total <10 & D_enrollment_total > 0 ~ "Low Enrollment",
+                                          TRUE ~ "Okay"))
+ print(location_crosswalk)   
+ 
+
+ positions_locations <- budgeted_positions_raw %>%
+  filter(!is.na(D_location_code)) %>%
+  count(D_location_code, D_location_desc, name = "row_count") %>% 
+  mutate( table = "Position") 
+```
+
+### c. Fix Location Codes
+
+Note this will have to be updated for each individual districts
+
+```{r}
+
+# Will validate afterward, but:
+
+# Note Newton D Bauer School of the Arts closed, only appears in the budget file
+# budgeted_positions_raw <- budgeted_positions_raw %>%
+ #  mutate(
+   #  D_location_code = case_when(
+  #     D_location_code == "0040CC New Tech East" ~ "0161CC East Tech High School",
+  #     D_location_code == "0276CC John Adams High School" ~ "0268CC John Adams College and # Career Academy",
+   #    # Had to make a judgement call here
+   #    D_location_code == "0330CC Lincoln-West High School" ~ "0333CC Lincoln-West School of Global Studies",
+   #    TRUE ~ D_location_code
+   #  )
+ #  )
+
+
+
+```
+
+# Part 8: Machine Learning
+
+## 8.0 Set-Up
+
+```{r}
+
+library(tm)
+library(textstem) #for turning words into their stem form
+library(randomForest) #for random forest model
+library(ranger) #for random forest model
+library(xgboost) #for random forest model
+
+#set sharepoint site URL for access to our org-wide and external files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+
+client_work_drive <- orgfiles_site$get_drive("Client Work")
+
+# Modified read_sharepoint logic for RDS files
+read_sharepoint_ers_obj <- function(drive_name = client_work_drive, 
+                                folder_path, 
+                                file_name_with_extension, 
+                                sheet_name = NULL, 
+                                skip_rows = 0,
+                                na_values = c("","N/A","NA","Missing")) {
+  # Construct the full data path
+  data_path <- file.path(folder_path, file_name_with_extension)
+  
+  file_extension <- paste0(".", tools::file_ext(file_name_with_extension))
+  
+  # Create a temporary file with the appropriate file extension
+  temp_file <- tempfile(fileext = file_extension)
+  
+  # Download the file from the specified drive to the temporary file
+  drive_name$download_file(data_path, dest = temp_file)
+  
+  # Read the downloaded file based on its file extension
+  data_loaded <- readRDS(temp_file)
+  
+  # Return the loaded data
+  return(data_loaded)
+}
+
+
+
+district_personnel <- budgeted_positions_raw
+
+training_bag_columns_position <- ers_read_sharepoint(folder_path = "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/1.%20BB%20Resources%20&%20Admin/3.%20BB%20Methodology%20&%20Guidance/Machine%20Learning%20Models",
+  file_name_with_extension =  "position_type_training_bag_columns_9.24.24.csv")
+
+model_position <- read_sharepoint_ers_obj(folder_path = "Other/Budget Benchmarking/1. BB Resources & Admin/3. BB Methodology & Guidance/Machine Learning Models", file_name_with_extension =  "position_type_model_9.24.24.rds")
+
+
+training_bag_columns_function <- ers_read_sharepoint(folder_path = "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/1.%20BB%20Resources%20&%20Admin/3.%20BB%20Methodology%20&%20Guidance/Machine%20Learning%20Models",
+  file_name_with_extension =  "function_training_bag_columns_9.24.24.csv")
+
+model_function <- read_sharepoint_ers_obj(folder_path = "Other/Budget Benchmarking/1. BB Resources & Admin/3. BB Methodology & Guidance/Machine Learning Models", file_name_with_extension =  "function_model_9.24.24.rds")
+
+```
+
+## 8.1 Modify Data
+
+```{r}
+
+# Add a reporting proxy. To train the ML model, we need a reporting coding, in leiu of a complete set of coding, we can use any proxy to get the job done. In Indy they had a similar column structure that we could use, otherwise you can use whether or not there is a match in the school's file as a nice proxy
+
+district_personnel <- district_personnel %>%
+  mutate(
+    C_reporting = case_when(
+      str_detect(D_location_desc, "Administration") ~ "Non-School",
+      TRUE ~ "School"
+    )
+  )
+
+
+district_personnel <- district_personnel %>%
+  rename(`D_position_title` = `D_position_title_desc`)
+
+
+
+```
+
+## 8.2 Load Functions
+
+```{r}
+
+# All functions
+
+#building a prefix function that allows me to add a tag into all words to mark which variable they come from
+add_prefix_to_words <- function(string, prefix) {
+  # Split the string into words
+  words <- unlist(strsplit(string, " "))
+  
+  # Add prefix to each word
+  prefixed_words <- paste0(prefix, words)
+  
+  # Rejoin the words into a single string
+  prefixed_string <- paste(prefixed_words, collapse = " ")
+  
+  return(prefixed_string)
+}
+
+#subset to columns needed (district_data_concat is combination of all fields relevant for prediction and standardized to only regular characters)
+prediction_data_prep <- function(data,
+                                 predicted_value) {
+  data %>%
+  mutate(D_position_title = str_replace_all(D_position_title,
+                                           "[^[:alnum:]]",
+                                           " "),
+         D_location_desc = str_replace_all(D_location_desc,
+                                           "[^[:alnum:]]",
+                                           " "),
+         C_reporting = str_replace_all(C_reporting,
+                                           "[^[:alnum:]]",
+                                           " "),
+         D_position_title = sapply(D_position_title,
+                                 add_prefix_to_words,
+                                 "pt"),
+         D_location_desc = sapply(D_location_desc,
+                                  add_prefix_to_words,
+                                  "ld"),
+         C_reporting = sapply(C_reporting,
+                              add_prefix_to_words,
+                              "rp"),
+         district_data_concat = paste(D_position_title,
+                                      D_location_desc,
+                                      C_reporting,
+                                      sep = " ")) %>%
+  select(district_data_concat)
+}
+
+
+# Warnings here are fine
+bag_prep <- function(data) {
+  Corpus(VectorSource(data$district_data_concat)) %>%
+  tm_map(content_transformer(tolower)) %>% 
+  tm_map(removePunctuation) %>% 
+  tm_map(removeNumbers) %>% 
+  tm_map(removeWords, stopwords("english")) %>% 
+  tm_map(stripWhitespace) %>% 
+  DocumentTermMatrix() %>%
+  as.matrix() %>% 
+  as.data.frame()
+}
+
+#adding key terms if they're not already in data (so that select doesn't break)
+add_each_col <- function(dataset, col_name) {
+  if (!(col_name %in% names(dataset))) {
+    dataset <- dataset %>% 
+      mutate(!!col_name := 0)
+  }
+  return(dataset)
+}
+
+add_all_cols <- function(dataset) {
+  dataset %>% 
+  add_each_col("pttchr") %>% 
+  add_each_col("pttch") %>% 
+  add_each_col("ptasst") %>% 
+  add_each_col("ptpara") %>% 
+  add_each_col("ptsvcs") %>% 
+  add_each_col("ptmgr") %>% 
+  add_each_col("ptcoor") %>% 
+  add_each_col("ptcoord") %>% 
+  add_each_col("ptteacher") %>% 
+  add_each_col("ptassistant") %>% 
+  add_each_col("ptparaprofessional") %>% 
+  add_each_col("ptservices") %>% 
+  add_each_col("ptmanager") %>% 
+  add_each_col("ptcoordinator")
+}
+
+fix_abbrevs <- function(data) {
+  data %>% 
+  mutate(ptteacher = ifelse(pttchr == 1 | pttch == 1 | ptteacher == 1, 1, 0),
+         ptassistant = ifelse(ptasst == 1 | ptassistant == 1, 1, 0),
+         ptparaprofessional = ifelse(ptpara ==1 | ptparaprofessional ==1, 1, 0),
+         ptservices = ifelse(ptservices == 1 | ptsvcs == 1, 1, 0),
+         ptmanager = ifelse(ptmanager == 1 | ptmgr == 1, 1, 0),
+         ptcoordinator=ifelse(ptcoord==1|ptcoor==1|ptcoordinator==1, 1, 0)) %>% 
+  select(-c(pttchr,
+            pttch,
+            ptasst,
+            ptpara,
+            ptsvcs,
+            ptmgr,
+            ptcoord,
+            ptcoor))
+}
+
+
+#removing words that weren't present in training data
+
+align_bags <- function(list_of_cols, test_data) {
+
+  non_training_words <- setdiff(colnames(test_data),
+                                list_of_cols$`.`)
+
+  adjusted_test_data <- test_data %>%
+    select(-any_of(non_training_words))
+
+  return(adjusted_test_data)
+}
+
+add_missing_cols <- function(list_of_cols, test_df) {
+
+  missing_columns <- setdiff(list_of_cols$`.`,
+                             names(test_df))
+
+  zero_values_df <- as_tibble(
+    matrix(0, ncol = length(missing_columns),
+           nrow = nrow(test_df),
+           dimnames = list(NULL, missing_columns))
+  )
+
+  adjusted_test_df <- bind_cols(test_df,
+                                zero_values_df)
+
+  return(adjusted_test_df)
+}
+
+
+prediction_data_prep_exp <- function(data) {
+  data %>%
+  mutate(D_position_title_h = str_replace_all(D_position_title,
+                                           "[^[:alnum:]]",
+                                           " "),
+         D_location_desc_h = str_replace_all(D_location_desc,
+                                           "[^[:alnum:]]",
+                                           " "),
+         C_reporting_h = str_replace_all(C_reporting,
+                                           "[^[:alnum:]]",
+                                           " "),
+         D_position_title_h = sapply(D_position_title_h,
+                                 add_prefix_to_words,
+                                 "pt"),
+         D_location_desc_h = sapply(D_location_desc_h,
+                                  add_prefix_to_words,
+                                  "ld"),
+         C_reporting_h = sapply(C_reporting_h,
+                              add_prefix_to_words,
+                              "rp"),
+         district_data_concat = paste(D_position_title_h,
+                                      D_location_desc_h,
+                                      C_reporting_h,
+                                      sep = " ")) %>% 
+    select(-c(D_location_desc_h, D_position_title_h, C_reporting_h))
+}
+
+
+
+
+```
+
+```{r}
+
+# ERS content functions
+
+
+turn_position_type_into_values <- function(dataset) {
+  dataset %>% 
+    mutate(C_position_type = case_when(
+      C_position_type == 0 ~ "Substitute",
+      C_position_type == 1 ~ "Teacher",
+      C_position_type == 2 ~ "Other",
+      C_position_type == 3 ~ "Nurse",
+      C_position_type == 4 ~ "TA",
+      C_position_type == 5 ~ "Sec/Clerk/Other Admin",
+      C_position_type == 6 ~ "Coordinator/Manager",
+      C_position_type == 7 ~ "Principal",
+      C_position_type == 8 ~ "Speech Therapist",
+      C_position_type == 9 ~ "Guidance Counselor",
+      C_position_type == 10 ~ "Custodian",
+      C_position_type == 11 ~ "Psychologist",
+      C_position_type == 12 ~ "Instructional Coach",
+      C_position_type == 13 ~ "Vice Principal",
+      C_position_type == 14 ~ "Social Worker",
+      C_position_type == 15 ~ "School Monitor/Security",
+      C_position_type == 16 ~ "Club Advisor/Coach",
+      C_position_type == 17 ~ "Librarian",
+      C_position_type == 18 ~ "(Exec) Director",
+      C_position_type == 19 ~ "Non-Position",
+      C_position_type == 20 ~ "Nurse Aide",
+      C_position_type == 21 ~ "Area Officers",
+      C_position_type == 22 ~ "Occupational Therapist",
+      C_position_type == 23 ~ "Physical Therapist",
+      C_position_type == 24 ~ "Instructional Coach Supervisors",
+      TRUE ~ NA
+    ))
+}
+
+
+turn_function_into_values <- function(dataset) {
+  dataset %>% 
+    mutate(C_function = case_when(
+      C_function == 0 ~ "Other Non-Compensation",
+      C_function == 1 ~ "Teacher Compensation",
+      C_function == 2 ~ "Aides Compensation",
+      C_function == 3 ~ "Substitute Compensation",
+      C_function == 4 ~ "Library & Media",
+      C_function == 5 ~ "Instructional Materials & Supplies",
+      C_function == 6 ~ "Other Compensation",
+      C_function == 7 ~ "Extended Time & Tutoring",
+      C_function == 8 ~ "Enrichment",
+      C_function == 9 ~ "Social & Emotional",
+      C_function == 10 ~ "Physical Health & Services",
+      C_function == 11 ~ "Career & Academic Counseling",
+      C_function == 12 ~ "Parent & Community Relations",
+      C_function == 13 ~ "Professional Growth",
+      C_function == 14 ~ "Curriculum Development",
+      C_function == 15 ~ "Recruitment",
+      C_function == 16 ~ "Special Population Program Management & Support",
+      C_function == 17 ~ "Governance",
+      C_function == 18 ~ "School Supervision",
+      C_function == 19 ~ "School Administration",
+      C_function == 20 ~ "Research & Accountability",
+      C_function == 21 ~ "Communications",
+      C_function == 22 ~ "Student Assignment",
+      C_function == 23 ~ "Facilities & Maintenance",
+      C_function == 24 ~ "Security & Safety",
+      C_function == 25 ~ "Food Services",
+      C_function == 26 ~ "Student Transportation",
+      C_function == 27 ~ "Utilities",
+      C_function == 28 ~ "Human Resources",
+      C_function == 29 ~ "Finance, Budget, Purchasing & Distribution",
+      C_function == 30 ~ "Data Processing & Information Services",
+      C_function == 31 ~ "Facilities Planning",
+      C_function == 32 ~ "Development & Fundraising",
+      C_function == 33 ~ "Legal",
+      C_function == 34 ~ "Insurance",
+      TRUE ~ "Other Non-Compensation"))
+}
+
+
+```
+
+## 8.3 Train Position Type Model
+
+```{r}
+
+
+district_personnel_position_type <- prediction_data_prep(district_personnel,
+                                                         "C_position_type")
+
+#making all district dataframes a single row per combination of values
+district_personnel_position_type <- district_personnel_position_type %>% 
+  group_by(district_data_concat) %>% 
+  summarize()
+
+# Prep the bags
+district_personnel_position_type_test_bag <- bag_prep(district_personnel_position_type)
+
+# Clean abreviations and columns
+district_personnel_position_type_test_bag <- add_all_cols(district_personnel_position_type_test_bag)
+district_personnel_position_type_test_bag <- fix_abbrevs(district_personnel_position_type_test_bag)
+
+
+district_personnel_position_type_test_bag <- align_bags(training_bag_columns_position,
+                                                        district_personnel_position_type_test_bag)
+
+# Identify and add missing columns in the test data
+district_personnel_position_type_test_bag <- add_missing_cols(training_bag_columns_position,                              district_personnel_position_type_test_bag)
+
+set.seed(223)
+
+#ordering columns the exact same order across training and test
+
+  ## Get the column names except "C_position_type"
+column_sorting <- sort(setdiff(training_bag_columns_position$'.', "C_position_type"))
+
+new_column_order_test <- c(column_sorting)
+
+position_type_district_test_bag <- district_personnel_position_type_test_bag[, new_column_order_test]
+
+
+
+# Make predictions on the test data
+rf_position_type_predictions_district <- predict(model_position,
+                                                 as.matrix(position_type_district_test_bag))
+
+#turning the predictions into a probability dataframe for each row in original data
+probability_matrix_district_position_type <- data.frame(
+  row_number = rep(c(1:nrow(district_personnel_position_type)),
+                   each = 25),
+  C_position_type = rep(c(0:24), nrow(district_personnel_position_type)),
+  confidence = rf_position_type_predictions_district)
+
+#shifting back to character values for position type
+probability_matrix_district_position_type <-
+  turn_position_type_into_values(probability_matrix_district_position_type)
+
+#filtering to row with highest prediction value
+probability_matrix_district_position_type <- probability_matrix_district_position_type %>% 
+  group_by(row_number) %>% 
+  filter(confidence == max(confidence))
+
+#adding prediction and confidence level to original data
+district_personnel_position_type <- district_personnel_position_type %>% 
+  ungroup() %>% 
+  mutate(predicted_value = probability_matrix_district_position_type$C_position_type,
+         confidence = probability_matrix_district_position_type$confidence)
+
+## Cleaning up the original data
+district_data_export_position <- prediction_data_prep_exp(district_personnel)
+
+district_data_export_position <- district_data_export_position %>% 
+  left_join(district_personnel_position_type %>% select(district_data_concat, predicted_value, confidence),
+            by = "district_data_concat")
+
+
+corrected_predictions <- district_data_export_position$predicted_value
+
+corrected_predictions[corrected_predictions == "Teacher"] <- "temp_teacher"
+corrected_predictions[corrected_predictions == "Other"] <- "Teacher"
+corrected_predictions[corrected_predictions == "Substitute"] <- "Other"
+corrected_predictions[corrected_predictions == "temp_teacher"] <- "Substitute"
+
+district_data_export_position$predicted_value <- corrected_predictions
+
+```
+
+## 8.4 Train Function Model
+
+```{r}
+
+district_personnel_function <- prediction_data_prep(district_personnel,
+                                                         "C_function")
+
+#making all district dataframes a single row per combination of values
+district_personnel_function <- district_personnel_function %>% 
+  group_by(district_data_concat) %>% 
+  summarize()
+
+# Prep the bags
+district_personnel_function_test_bag <- bag_prep(district_personnel_function)
+
+# Clean abreviations and columns
+district_personnel_function_test_bag <- add_all_cols(district_personnel_function_test_bag)
+district_personnel_function_test_bag <- fix_abbrevs(district_personnel_function_test_bag)
+
+district_personnel_function_test_bag <- align_bags(training_bag_columns_function,
+                                                        district_personnel_function_test_bag)
+# Identify and add missing columns in the test data
+district_personnel_function_test_bag <- add_missing_cols(training_bag_columns_function,                              district_personnel_function_test_bag)
+
+
+#setting seed for replicability
+set.seed(223)
+
+#ordering columns the exact same order across training and test
+
+  ## Get the column names except "C_position_type"
+column_sorting <- sort(setdiff(training_bag_columns_function$'.', "C_function"))
+
+new_column_order_test <- c(column_sorting)
+
+function_district_test_bag <- district_personnel_function_test_bag[, new_column_order_test]
+
+
+# Make predictions on the test data
+rf_function_predictions_district <- predict(model_function,
+                                                 as.matrix(function_district_test_bag))
+
+#turning the predictions into a probability dataframe for each row in original data
+probability_matrix_district_function <- data.frame(
+  row_number = rep(c(1:nrow(district_personnel_function)),
+                   each = 35),
+  C_function = rep(c(0:34), nrow(district_personnel_function)),
+  confidence = rf_function_predictions_district)
+
+#shifting back to character values for position type
+probability_matrix_district_function <-
+  turn_function_into_values(probability_matrix_district_function)
+
+#filtering to row with highest prediction value
+probability_matrix_district_function <- probability_matrix_district_function %>% 
+  group_by(row_number) %>% 
+  filter(confidence == max(confidence))
+
+#adding prediction and confidence level to original data
+district_personnel_function <- district_personnel_function %>% 
+  ungroup() %>% 
+  mutate(predicted_value = probability_matrix_district_function$C_function,
+         confidence = probability_matrix_district_function$confidence)
+
+
+district_data_export_function <- prediction_data_prep_exp(district_personnel)
+
+district_data_export_function <- district_data_export_function %>% 
+  left_join(district_personnel_function %>% select(district_data_concat, predicted_value, confidence),
+            by = "district_data_concat")
+
+```
+
+## 8.5 Merging predictions together
+
+```{r}
+
+## Change back any columns you changed in 8.1
+
+district_data_export_function <- district_data_export_function %>%
+  rename(`D_position_title_desc` = `D_position_title`)
+
+district_data_export_position <- district_data_export_position %>%
+  rename(`D_position_title_desc` = `D_position_title`)
+
+shared_cols <- intersect(names(budgeted_positions_raw), names(district_data_export_position))
+shared_cols <- intersect(shared_cols, names(district_data_export_function))
+
+
+budgeted_positions_raw <- budgeted_positions_raw %>%
+  # join position predictions
+  left_join(
+    district_data_export_position %>%
+      select(all_of(shared_cols), ML_predicted_position_type = predicted_value),
+    by = shared_cols
+  ) %>%
+  # join function predictions
+  left_join(
+    district_data_export_function %>%
+      select(all_of(shared_cols), ML_predicted_function = predicted_value),
+    by = shared_cols
+  )
+
+
+```
+
+# Part 9: Upload File to Sharepoint
+
+## Part 9.1 Any final clean up
+
+Add any final clean up to your file below (remove unncessary columns, update column names to be standard etc.)
+
+```{r}
+processed_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/1.%20Data%20Processed"
+
+#budgeted positions
+ers_write_sharepoint(data = budgeted_positions_raw,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = paste0(district_folder,"_budgeted_positions_processed.csv"))
+
+
+#Schools File
+ers_write_sharepoint(data = school_raw,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = paste0(district_folder,"_schools_processed.csv"))
+
+#location crosswalk
+ers_write_sharepoint(data = location_crosswalk,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = paste0(district_folder,"_location_crosswalk.csv"))
+```

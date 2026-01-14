@@ -1,0 +1,799 @@
+---
+title: "01_bb_validation"
+author: "Jenny Katz"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3   # Customize the depth of the table of contents for HTML document
+    toc_float:
+      collapsed: true    # Start with the table of contents expanded
+      smooth_scroll: true  # Enable smooth scrolling
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding,
+  output_dir = "knitted files", output_format = "all") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 0: Read Libraries and connect to Sharepoint
+
+```{r}
+erstools::ers_load_packages()
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+
+#bring in pub available data
+nces_data <- read_excel("NCES Data for BB Districts.xlsx")
+```
+
+# Part 1: Update Variables
+
+```{r}
+
+#1. folder path to data
+raw_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/0.%20Data%20Received/"
+
+#2. district folder
+district_folder <-"Indianapolis"
+
+
+#3. file names 
+budgeted_positions_file <- "FY26 Budgeted Position File - 09172025.xlsx"
+school_file <- "FY26 Enrollment Data - 09162025.xlsx"
+
+#4.District & Project INfo
+LEAID = "1804770" #Open up nces_data to find
+project_year = "2025"
+project = "Budget Benchmarking 2025"
+
+```
+
+# Part 2: Bring in Data
+
+```{r}
+#4.Bring in files 
+#budgeted positions
+cold_spring <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder, "/Innovation Data"),
+                   file_name_with_extension = "Cold Spring School #315.xlsx", skip_rows = 1)
+
+edison <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder, "/Innovation Data"),
+                   file_name_with_extension = "Comparability Report for Innovation Schools - Edison School of the Arts (4).xlsx", sheet_name = "Sheet1", skip_rows = 1)
+
+sankofa <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder, "/Innovation Data"),
+                   file_name_with_extension = "Comparability Report for Innovation Schools (SANKOFA) (1) (1).xlsx", skip_rows = 1)
+
+tgns <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder, "/Innovation Data"),
+                   file_name_with_extension = "TGNS 2025 - Comparability Report for Innovation Schools.xlsx", skip_rows = 1)
+
+wins <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder, "/Innovation Data"),
+                   file_name_with_extension = "WINS 2025 - Comparability Report for Innovation Schools.xlsx", skip_rows = 1)
+
+#rules 
+
+```
+
+## Cleaning up the files
+
+```{r}
+
+cold_spring <- cold_spring %>% 
+  filter(!is.na(`Last Name`)) %>% 
+  select(-`...9`) %>% 
+  mutate(`School Name` = "Cold Spring School",
+         `School Number` = 315) %>% 
+  select(-c(`School Name/No.#`)) %>% 
+  rename(`Total Salary Only                       (No Hourly Rate)` = `Total Salary Only`)
+
+
+edison <- edison %>% 
+  filter(!is.na(`Last Name`)) %>% 
+  filter(`Last Name` != "Federally Funded Positions not included in Count") %>% 
+  mutate(`School Name` = "Edison School of the Arts",
+         `School Number` = 47) %>% 
+  select(-c(`School Name/No.#`))
+  
+
+sankofa <- sankofa %>% 
+  mutate(`School Name` = "Sankofa at Arlington Woods",
+         `School Number` = 99) %>% 
+  select(-c(`School Name/No.#`))
+
+
+tgns <- tgns %>% 
+  mutate(`School Name` = "Thomas Gregg Neighborhood School",
+         `School Number` = 15) %>% 
+  select(-c(`School Name/No.#`))
+
+
+wins <- wins %>% 
+  mutate(`School Name` = "Washington Irving Neighborhood School",
+         `School Number` = 14) %>% 
+  select(-c(`School Name/No.#`))
+
+
+
+```
+
+## 2.2 Stacking Together
+
+```{r}
+
+budgeted_positions_raw <- rbind(cold_spring,
+                                edison,
+                                sankofa,
+                                tgns,
+                                wins)
+
+
+
+
+```
+
+
+# Part 3: Clean Up Budgeted Positions
+
+## 3.0 Column Mapping
+
+```{r}
+
+#    # Keep ERS names exactly as is - fill with NAs if missing
+budgeted_positions_raw <- budgeted_positions_raw %>% 
+  mutate(
+
+    #Project INfo
+    H_record_ID = row_number(),
+    H_district = district_folder,
+    H_LEAID = LEAID,
+    H_project_year = project_year,
+    H_project = project,
+    
+    #FTE
+    D_employee_id = NA_character_, #critical
+    D_empl_fte = FTE, #critical
+   
+    
+    #account codes
+    D_activity_code     = NA_character_,
+    D_allocation_code = NA_character_,
+    D_class_code   = NA_character_,
+    D_cost_center_code  = NA_character_,
+    D_fund_code    = NA_character_, #critical
+    D_funct_code   = NA_character_,
+    D_dept_code         = NA_character_,
+    D_location_code      = `School Number` + 5500, #critical
+    D_position_type_code    = NA_character_,
+    D_position_title_code    = NA_character_,
+    D_object_code  = NA_character_,
+    D_program_code = NA_character_,
+    D_project_code = NA_character_,
+    
+    #account descriptions
+    D_activity_desc     = NA_character_,
+    D_allocation_desc  = NA_character_,
+    D_class_desc   = NA_character_,
+    D_cost_center_desc  = "Innovation Data",
+    D_fund_desc    = `Funding Source`, #critical
+    D_funct_desc   = NA_character_,
+    D_dept_desc    = NA_character_, 
+    D_location_desc = `School Name`, #critical
+    D_position_type_desc     = NA_character_, 
+    D_position_title_desc    = `Job Title`, #critical
+    D_object_desc  = NA_character_,
+    D_program_desc = NA_character_,
+    D_project_desc = NA_character_,
+  
+    
+   #other disrict specific fields to add... update as needed
+    D_other_1 =  `Total Salary Only                       (No Hourly Rate)`,
+    D_other_2 =  NA_character_,
+    D_other_3 =  NA_character_,
+    D_other_4 =  NA_character_,
+    
+     .keep = "none"
+   
+  ) %>%
+ select(where(~ !all(is.na(.x))))
+
+```
+
+## 3.1 Manual Checks
+
+-   Look at Data Validation table in OneNote and complete (right year, detailed enough, etc.)
+
+## 3.2 Review Table Structure
+
+```{r}
+#check number of columns/rows. 
+#does this seem right? 
+#ALso check for missing data and data types within the file
+ers_column_info(budgeted_positions_raw)
+```
+
+## 3.3. Remove Blank Rows/Columns
+
+This code block deletes any rows or columns made up fully of blank values ("", NA," ", etc.). These rows and columns wouldn't give you any additional info so it's best practice to take them out early on.
+
+```{r}
+
+#pre-check
+ncol(budgeted_positions_raw)
+nrow(budgeted_positions_raw)
+
+#remove empty rows and columns
+budgeted_positions_raw <- remove_empty(budgeted_positions_raw,
+                                 which = c("rows", "cols"))
+
+#post-check
+nrow(budgeted_positions_raw)
+ncol(budgeted_positions_raw)
+
+```
+
+## 3.4 Check for Duplicates/Remove
+
+If any rows are repetitive or not required for your analysis you can remove them. For example - you have multiple years of data but only need one.
+
+```{r}
+
+#Check for duplicates
+budgeted_positions_raw %>%
+ get_dupes(-H_record_ID)
+
+# Duplicates are caused by the lack of employee id (no action needed)
+
+```
+
+## 3.5 Review and modify column data types
+
+Review the data type of each column and modify if needed. Refer to the Data Dictionary for the correct data type for each column. For more information on different data types in R and why it matters, please refer to this: <https://app.tettra.co/teams/ersknowledge/pages/32-r-data-types>
+
+```{r}
+#review data type of each column
+#ALL Columns except FTE and record ID, should be charachter (this will make joining across tables easier)
+col_info <- data.frame(data_type = sapply(budgeted_positions_raw, class))
+print(col_info)
+
+
+
+#change data type of columns if needed (below is an example to convert to numeric values) - common functions are as.character, as.numeric, as.integer, as.Date
+
+#budgeted_positions_raw$D_empl_FTE <- as.numeric(budgeted_positions_raw$D_empl_FTE)
+
+```
+
+# NO need to adjust fte or apply rules. Will merge with school data once the full data sources are appended together.
+
+```{r}
+budgeted_positions_raw <- budgeted_positions_raw %>% 
+  mutate(M_fte_adjusted = D_empl_fte)
+
+```
+
+# Part 6. Clean up Schools file
+
+## 6.1 Bring in School Data
+
+```{r}
+
+#schools files
+school_raw <- ers_read_sharepoint(folder_path = paste0(raw_data_folder_path,district_folder),
+                   file_name_with_extension = school_file,
+                   skip_rows = 1)
+
+
+# Removing rows that are used for totals and section headers
+school_raw <- school_raw %>%
+  dplyr::slice(-c(45:47))
+
+
+```
+
+## 6.2 Map District Col to ERS Columns
+
+```{r}
+#changing column names and removing unneeded columns
+#replace the column names after the "=" with column names from your data.You can press tab after the = to select column names available in the data
+
+school_raw <- school_raw %>% 
+  mutate(
+    
+    #Project INfo
+    H_record_ID = row_number(),
+    H_district = district_folder,
+    H_LEAID = LEAID,
+    H_project_year = project_year,
+    H_project = project,
+    
+    #school info
+    D_location_code = `School ID`,
+    D_location_desc = School,
+    D_school_level = `Grade Configuration`,
+    D_school_type = Program,
+    D_grade_span = NA_character_,
+    D_enrollment_total = as.numeric(`K-12 Gen Ed`) + coalesce(`Self Contained`, 0),
+    D_preK_enrollment = `Pre-K`,
+    D_ell_total = `ELL 1` + `ELL 2` + `ELL 3` + `ELL 4`,
+    D_frl_total = `Direct Cert %` * D_enrollment_total,
+    D_swd_total = NA_character_,
+    D_self_contained = `Self Contained`,
+    
+    
+     .keep = "none"
+  )
+  
+
+```
+
+6.3 Update Data Type
+
+```{r}
+#review data type of each column
+#ALL Columns except FTE and record ID, should be charachter (this will make joining across tables easier)
+col_info <- data.frame(data_type = sapply(school_raw, class))
+print(col_info)
+
+
+
+#change data type of columns if needed (below is an example to convert to numeric values) - common functions are as.character, as.numeric, as.integer, as.Date
+
+#budgeted_positions_raw$D_empl_FTE <- as.numeric(budgeted_positions_raw$D_empl_FTE)
+```
+
+## 6.4 Review School Structure
+
+```{r}
+#check number of columns/rows. 
+#does this seem right? 
+#ALso check for missing data and data types within the file
+ers_column_info(school_raw)
+```
+
+## 6.5 Check /Remove Duplicate School
+
+### a. Investigate Dups
+
+```{r}
+
+#Check for duplicates
+school_raw %>%
+ get_dupes(-H_record_ID)
+
+
+#deuplicate
+school_raw<- school_raw %>%
+  distinct()
+
+#find shools with the same school ID
+duplicates_by_id <- school_raw  %>%
+  get_dupes(D_location_code)
+
+```
+
+### b. Remove Duplicates
+
+```{r}
+# No duplicates
+```
+
+## 6.6 Add Coding Columns
+
+### a. School Level
+
+```{r}
+#view school level
+school_raw %>%
+  group_by(D_school_level) %>%
+  count()
+
+#Update for your district's values 
+school_raw <-school_raw %>%
+  mutate(C_school_level = case_when(D_school_level == "ES"	~ "ES",
+                                    D_school_level == "K-12"	~ "Other",
+                                    D_school_level == "K-7"	~ "ES",
+                                    D_school_level == "HS" ~ "HS",
+                                    D_school_level == "MS" ~ "MS",
+                                    D_school_level == "K-8" ~ "ES",
+                                    D_school_level == "K-5" ~ "ES",
+                                    TRUE ~ "Other"))
+
+
+
+
+#check coding
+school_raw %>%
+  group_by(D_school_level,C_school_level) %>%
+  count()
+
+```
+
+### b. Alternative School Flag
+
+```{r}
+#UPDATE BASED on DISTRICT'S ALT SCHOOLS
+
+# KF to Update
+school_raw <- school_raw %>%
+  mutate(
+    C_school_flag = case_when(
+      D_location_desc %in% c(
+    "Liberty Grove at Elder Diggs",
+    "Phalen Leadership Academy at Louis B. Russell Jr. School 48",
+    "Matchbook Learning @ Wendell Phillips",
+    "Emma Donnan Elementary and Middle School 72",
+    "Phalen Leadership Academy@George H Fisher",
+    "PLA @ 103",
+    "KIPP Unite",
+    "Impact Academy 1",
+    "Impact Academy 2",
+    "Impact Academy 3",
+    "Roots Off Campus Instruction",
+    "REACH Program",
+    "Project Search/Site",
+    "Global Preparatory Academy @ Riverside (K-6)",
+    "The PATH School at Stephen Foster School 67",
+    "Positive Support Academy",
+    "Step Ahead Academy",
+    "Monarca",
+    "Enlace",
+    "KIPP College Prep",
+    "Avondale Meadows Middle School",
+    "Phalen Virtual",
+    "Newcomer",
+    "Herron High School",
+    "Herron Riverside High School",
+    "Purdue Polytech",
+    "Purdue Polytech North",
+    "KIPP Legacy High School",
+    "Hope Academy",
+    "PSOE Virtual",
+    "Christel House Academy South",
+    "Simon Youth Academy"
+    ) ~ "Include: District-Wide Only",  
+      TRUE ~ "Include: All"
+    )
+  )
+
+
+school_raw <- school_raw %>%
+  mutate(
+    C_school_flag_reason = case_when(
+      D_location_desc %in% c(
+    "Liberty Grove at Elder Diggs",
+    "Phalen Leadership Academy at Louis B. Russell Jr. School 48",
+    "Matchbook Learning @ Wendell Phillips",
+    "Emma Donnan Elementary and Middle School 72",
+    "Phalen Leadership Academy@George H Fisher",
+    "PLA @ 103",
+    "KIPP Unite",
+    "Impact Academy 1",
+    "Impact Academy 2",
+    "Impact Academy 3",
+    "Roots Off Campus Instruction",
+    "REACH Program",
+    "Project Search/Site",
+    "Global Preparatory Academy @ Riverside (K-6)",
+    "The PATH School at Stephen Foster School 67",
+    "Positive Support Academy",
+    "Step Ahead Academy",
+    "Monarca",
+    "Enlace",
+    "KIPP College Prep",
+    "Avondale Meadows Middle School",
+    "Phalen Virtual",
+    "Newcomer",
+    "Herron High School",
+    "Herron Riverside High School",
+    "Purdue Polytech",
+    "Purdue Polytech North",
+    "KIPP Legacy High School",
+    "Hope Academy",
+    "PSOE Virtual",
+    "Christel House Academy South",
+    "Simon Youth Academy"
+    ) ~ "2024 Analysis",  
+      TRUE ~ "Neighborhood"
+    )
+  )
+
+#check coding
+school_raw %>%
+  group_by(C_school_flag) %>%
+  count()
+
+```
+
+### c. Enrollment Characteristics
+
+```{r}
+
+#Update for your district's values 
+school_raw <-school_raw %>%
+  mutate(C_school_level_mapped = case_when(C_school_level == "ES"	~ "ES",
+                                    C_school_level == "MS"	~ "SS",
+                                    C_school_level == "HS"	~ "SS",
+                                    TRUE ~ "Other"))
+
+school_raw %>%
+  group_by(C_school_level,C_school_level_mapped) %>%
+  count()
+
+school_raw <- school_raw %>% 
+  mutate(C_school_size = ifelse(C_school_level == "ES", ifelse(D_enrollment_total < 350, "Small", "Not Small"), ifelse(D_enrollment_total < 500, "Small", "Not Small")))
+
+
+school_raw <- school_raw %>%
+  mutate(C_gen_ed = D_enrollment_total - D_self_contained,
+         M_ell_pct = D_ell_total / D_enrollment_total,
+         M_swd_pct = as.numeric(D_swd_total) / D_enrollment_total,
+         M_frl_pct = D_frl_total / D_enrollment_total)
+
+
+# Adding in sanity cleanups - you should manually check any huge variations
+school_raw <- school_raw %>%
+  mutate(M_ell_pct = ifelse(is.na(M_ell_pct), 0, ifelse(M_ell_pct > 1, 1, M_ell_pct)),
+         M_swd_pct = ifelse(is.na(M_swd_pct), 0, ifelse(M_swd_pct > 1, 1, M_swd_pct)),
+         M_frl_pct = ifelse(is.na(M_frl_pct), 0, ifelse(M_frl_pct > 1, 1, M_frl_pct)))
+
+
+```
+
+```{r}
+
+# Create all levels quartiles flags
+school_raw <- school_raw %>%
+  group_by(C_school_flag) %>%
+  mutate(
+    M_swd_quartile_flag = case_when(
+      M_swd_pct <= quantile(M_swd_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_swd_pct > quantile(M_swd_pct, 0.25, na.rm = TRUE) & M_swd_pct <= quantile(M_swd_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_swd_pct > quantile(M_swd_pct, 0.5, na.rm = TRUE) & M_swd_pct <= quantile(M_swd_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_swd_pct > quantile(M_swd_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+school_raw <- school_raw %>%
+  group_by(C_school_flag) %>%
+  mutate(
+    M_ell_quartile_flag = case_when(
+      M_ell_pct <= quantile(M_ell_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_ell_pct > quantile(M_ell_pct, 0.25, na.rm = TRUE) & M_ell_pct <= quantile(M_ell_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_ell_pct > quantile(M_ell_pct, 0.5, na.rm = TRUE) & M_ell_pct <= quantile(M_ell_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_ell_pct > quantile(M_ell_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+school_raw <- school_raw %>%
+  group_by(C_school_flag) %>%
+  mutate(
+    M_frl_quartile_flag = case_when(
+      M_frl_pct <= quantile(M_frl_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_frl_pct > quantile(M_frl_pct, 0.25, na.rm = TRUE) & M_frl_pct <= quantile(M_frl_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_frl_pct > quantile(M_frl_pct, 0.5, na.rm = TRUE) & M_frl_pct <= quantile(M_frl_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_frl_pct > quantile(M_frl_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+```
+
+```{r}
+
+# Create all levels quartiles flags
+school_raw <- school_raw %>%
+  group_by(C_school_flag, C_school_level_mapped) %>%
+  mutate(
+    M_swd_quartile_flag_sized = case_when(
+      M_swd_pct <= quantile(M_swd_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_swd_pct > quantile(M_swd_pct, 0.25, na.rm = TRUE) & M_swd_pct <= quantile(M_swd_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_swd_pct > quantile(M_swd_pct, 0.5, na.rm = TRUE) & M_swd_pct <= quantile(M_swd_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_swd_pct > quantile(M_swd_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+school_raw <- school_raw %>%
+  group_by(C_school_flag, C_school_level_mapped) %>%
+  mutate(
+    M_ell_quartile_flag_sized = case_when(
+      M_ell_pct <= quantile(M_ell_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_ell_pct > quantile(M_ell_pct, 0.25, na.rm = TRUE) & M_ell_pct <= quantile(M_ell_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_ell_pct > quantile(M_ell_pct, 0.5, na.rm = TRUE) & M_ell_pct <= quantile(M_ell_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_ell_pct > quantile(M_ell_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+school_raw <- school_raw %>%
+  group_by(C_school_flag, C_school_level_mapped) %>%
+  mutate(
+    M_frl_quartile_flag_sized = case_when(
+      M_frl_pct <= quantile(M_frl_pct, 0.25, na.rm = TRUE) ~ "Low",
+      M_frl_pct > quantile(M_frl_pct, 0.25, na.rm = TRUE) & M_frl_pct <= quantile(M_frl_pct, 0.5, na.rm = TRUE) ~ "Low-Middle",
+      M_frl_pct > quantile(M_frl_pct, 0.5, na.rm = TRUE) & M_frl_pct <= quantile(M_frl_pct, 0.75, na.rm = TRUE) ~ "High-Middle",
+      M_frl_pct > quantile(M_frl_pct, 0.75, na.rm = TRUE) ~ "High",
+      TRUE ~ "0" # Handle any missing or unexpected cases
+    )
+  ) %>%
+  ungroup()
+
+
+```
+
+```{r}
+
+# Validating the quartiles
+make_quartile_summary <- function(data, var, flag_var) {
+  cutoffs <- quantile(data[[var]], probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+  
+  counts <- data %>%
+    count(!!sym(flag_var)) %>%
+    rename(quartile = !!sym(flag_var), count = n)
+  
+  tibble(
+    metric = var,
+    q25 = cutoffs[1],
+    q50 = cutoffs[2],
+    q75 = cutoffs[3]
+  ) %>%
+    crossing(counts)
+}
+
+# build tables for each metric (only looking at traditional campuses)
+
+## Switch filters to small, not-small as needed
+data_testing <- school_raw %>% 
+  filter(C_school_flag == "Include: All") %>% 
+  filter(C_school_size == "Not Small")
+
+frl_summary <- make_quartile_summary(data_testing, "M_frl_pct", "M_frl_quartile_flag")
+swd_summary <- make_quartile_summary(data_testing, "M_swd_pct", "M_swd_quartile_flag")
+ell_summary <- make_quartile_summary(data_testing, "M_ell_pct", "M_ell_quartile_flag")
+
+# combine into one concise table
+quartile_summary <- bind_rows(frl_summary, swd_summary, ell_summary)
+
+print(quartile_summary)
+
+```
+
+## 6.7 Compare Enrollment to NCES
+
+```{r}
+
+public_data_comp_check <- public_data_comp_check %>%
+  left_join(
+    (school_raw %>%
+       group_by(H_LEAID) %>%
+       summarise(M_total_district_enrollment = sum(D_enrollment_total, na.rm = TRUE))),
+    by = c("LEAID" = "H_LEAID")
+  ) %>%
+  mutate(
+    M_enrollment_difference = M_total_district_enrollment - `Total Enrollment`
+  )
+```
+
+# Part 7: Position + Schools Crosswalk
+
+### b. Join Position & School Tables
+
+```{r}
+
+#Create Crosswalk 
+location_crosswalk <- bind_rows(
+   # --- Part 1: Prepare the Budget Positions Table ---
+ budgeted_positions_raw %>%
+  filter(!is.na(D_location_code)) %>%
+  count(D_location_code, D_location_desc, name = "row_count") %>% 
+  mutate( table = "Position") %>% 
+  rename("School ID" = D_location_code, 
+         "School Name" = D_location_desc),
+
+  # --- Part 2: Prepare the Schools Table ---
+  school_raw %>%
+    count(D_location_code, D_location_desc, name = "row_count") %>% 
+    mutate(table = "School") %>%                           
+    rename("School ID" = D_location_code, 
+           "School Name" = D_location_desc) 
+
+) %>% 
+  
+   #Keep only the first school name for each ID ---
+  group_by(`School ID`) %>%
+  mutate(`School Name` = first(`School Name`)) %>%
+  ungroup() %>%
+
+  # --- Part 3: Pivot the Combined Table ---
+  pivot_wider(
+    names_from = table,
+    values_from = row_count,
+    values_fill = 0 
+  ) %>%
+  arrange(`School Name`)
+
+
+
+#bring in Total FTE
+location_crosswalk <- location_crosswalk %>%
+  left_join(
+    budgeted_positions_raw %>%
+      group_by(D_location_code, D_location_desc) %>%
+      summarise(M_total_FTE = sum(M_fte_adjusted)) %>%
+      filter(M_total_FTE > 0) %>%
+      filter(!is.na(D_location_code)) %>%
+      select(D_location_code, M_total_FTE),
+    by = c("School ID" = "D_location_code")
+  )
+
+#Bring in Total Enrollment 
+location_crosswalk <- location_crosswalk %>%
+  left_join(
+    school_raw %>%
+      select(D_location_code, D_enrollment_total,C_school_flag),
+    by = c("School ID" = "D_location_code")
+  ) %>%
+  mutate(M_fte_per_500_students = M_total_FTE / D_enrollment_total * 500) %>%
+  arrange(desc(School),C_school_flag)
+  
+
+print(location_crosswalk)
+```
+
+### c. Fix Location Codes
+
+Note this will have to be updated for each individual districts
+
+```{r}
+
+
+## Will return to, but Indy location codes in the schools file should add 5500 to the codes that are less than 300
+
+```
+
+
+# Part 9: Upload File to Sharepoint
+
+## Part 9.1 Any final clean up
+
+Add any final clean up to your file below (remove unncessary columns, update column names to be standard etc.)
+
+```{r}
+processed_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/1.%20Data%20Processed"
+
+#budgeted positions
+ers_write_sharepoint(data = budgeted_positions_raw,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = paste0(district_folder,"_innovation_budgeted_positions_processed.csv"))
+
+
+# #Schools File
+# ers_write_sharepoint(data = school_raw,
+#                      folder_path = processed_data_folder_path,
+#                      file_name_with_extension = paste0(district_folder,"_schools_processed.csv"))
+# 
+# #location crosswalk
+# ers_write_sharepoint(data = location_crosswalk,
+#                      folder_path = processed_data_folder_path,
+#                      file_name_with_extension = paste0(district_folder,"_location_crosswalk.csv"))
+```

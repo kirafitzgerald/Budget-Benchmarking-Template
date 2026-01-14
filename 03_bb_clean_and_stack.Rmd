@@ -1,0 +1,1106 @@
+---
+title: "03_Stack the Files"
+author: "Jenny Katz"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3   # Customize the depth of the table of contents for HTML document
+    toc_float:
+      collapsed: true    # Start with the table of contents expanded
+      smooth_scroll: true  # Enable smooth scrolling
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding,
+  output_dir = "knitted files", output_format = "all") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 0: Read Libraries and connect to Sharepoint
+
+```{r}
+erstools::ers_load_packages()
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+```
+
+```{r}
+ers_read_sharepoint_local <- function(folder_path,
+                                file_name_with_extension,
+                                sheet_name = NULL,
+                                drive_name = "client_work_drive",
+                                skip_rows = 0,
+                                na_values = c(""),
+                                clean_names = "FALSE")
+{
+  # Replace '%20' in the file name with spaces to clean the file name
+  file_name_with_extension <- gsub("%20", " ", file_name_with_extension)
+
+  # Clean the folder path and extract the drive name from it if not explicitly provided
+  cleaned <- erstools::ers_sharepoint_path_clean(folder_path)
+  folder_path <- cleaned$path_clean  # Cleaned folder path for SharePoint
+
+  # If drive_name is not explicitly provided, use the drive_name extracted from the folder path
+  if (missing(drive_name)) {
+    drive_name <- cleaned$drive_name
+  }
+
+  # Suppress messages while connecting to SharePoint sites
+  orgfiles_site <- get_sharepoint_site(site_url = "https://erstrategies1.sharepoint.com/sites/orgfiles") %>% suppressMessages
+  external_site <- get_sharepoint_site(site_url = "https://erstrategies1.sharepoint.com/sites/external") %>% suppressMessages
+  data_hub_site <- get_sharepoint_site(site_url = "https://erstrategies1.sharepoint.com/sites/ers-data") %>% suppressMessages
+
+  # Retrieve drives from each SharePoint site
+  client_work_drive <- orgfiles_site$get_drive("Client Work")
+  internal_drive <- orgfiles_site$get_drive("Internal")
+  external_drive <- external_site$get_drive("Documents")
+  data_hub_drive <- data_hub_site$get_drive("Documents")
+
+  # Determine which drive to use based on the drive_name parameter
+  if (drive_name == "client_work_drive") {
+    drive <- client_work_drive
+  }
+  else if (drive_name == "internal_drive") {
+    drive <- internal_drive
+  }
+  else if (drive_name == "external_drive") {
+    drive <- external_drive
+  }
+  else if (drive_name == "data_hub_drive") {
+    drive <- data_hub_drive
+  }
+  else {
+    # If the drive_name is invalid, stop and raise an error
+    stop("Invalid drive name. Use 'client_work_drive', 'internal_drive', 'external_drive', or 'data_hub_drive'.")
+  }
+
+  # Try to get the folder item from the drive
+  folder_item <- try(drive$get_item(folder_path), silent = TRUE)
+  if (inherits(folder_item, "try-error")) {
+    # Stop execution if the folder path does not exist
+    stop("Folder path does not exist: '", folder_path, "'")
+  }
+
+  # Construct the full path to the data file within the folder
+  data_path <- file.path(folder_path, file_name_with_extension)
+
+  # Try to get the file item from the drive
+  file_item <- try(drive$get_item(data_path), silent = TRUE)
+  if (inherits(file_item, "try-error")) {
+    # Stop execution if the file does not exist
+    stop("File '", file_name_with_extension, "' does not exist in folder: '",
+         folder_path, "'")
+  }
+
+  # Determine the file extension of the target file
+  file_extension <- paste0(".", tools::file_ext(file_name_with_extension))
+
+  # Create a temporary file with the appropriate extension for downloading
+  temp_file <- tempfile(fileext = file_extension)
+
+  # Download the file from SharePoint to the temporary file
+  drive$download_file(data_path, dest = temp_file)
+
+  # Read the file based on its extension
+  if (tools::file_ext(file_name_with_extension) == "csv") {
+    # For CSV files, use `fread` with specified skip and NA values
+    raw_data <- fread(temp_file, skip = skip_rows, na.strings = na_values, colClasses = list(character = "D_location_code"))
+  }
+  else if (tools::file_ext(file_name_with_extension) %in% c("xls", "xlsx")) {
+    # For Excel files, use `read_excel` with the specified sheet name, skip rows, and NA values
+    raw_data <- read_excel(temp_file, sheet = sheet_name,
+                           skip = skip_rows, na = na_values, guess_max = 100000, col_types = "text")
+  }
+  else if (tools::file_ext(file_name_with_extension) == "shp") {
+    # Create a temporary directory
+    temp_dir <- tempdir()
+    # Define possible extensions
+    shp_components <- c("shp", "shx", "dbf", "prj", "cpg")
+
+    # Download each component
+    for (ext in shp_components) {
+      file_path <- file.path(temp_dir, paste0(tools::file_path_sans_ext(file_name_with_extension), ".", ext))
+      drive$download_file(file.path(folder_path, paste0(tools::file_path_sans_ext(file_name_with_extension), ".", ext)), dest = file_path)
+    }
+
+    # Read the shapefile
+    raw_data <- st_read(file.path(temp_dir, paste0(tools::file_path_sans_ext(file_name_with_extension), ".shp")))
+  }
+  else {
+    # Stop execution for unsupported file formats
+    stop("Unsupported file format. Supported formats are xls, xlsx, csv, or shp: '",
+         file_name_with_extension, "'")
+  }
+
+  # Check if clean_names is TRUE and file name does NOT contain ".shp"
+  if (clean_names == "TRUE" && !grepl("\\.shp$",
+                                    file_name_with_extension,
+                                    ignore.case = TRUE)) {
+    raw_data <- raw_data %>%
+      janitor::clean_names()
+  }
+
+
+  # Return the loaded data
+  return(raw_data)
+}
+
+
+
+```
+
+# Part 1: File & Path Variables
+
+## 1.1 Current Cohort Variables
+
+```{r}
+#ADJUST THESE VARIABLES AS NEEDED
+#current cohort
+raw_data_folder_path_current <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/2.%20Data%20Coding"
+
+
+#District List for current cohort (adjust as needed)
+district_list <- c("Boulder",
+                   "Cleveland",
+                   "Columbus",
+                   "Denver",
+                    "Detroit",
+                   "Greenville",
+                   "Hamilton",
+                   "Horry",
+                   "Indianapolis",
+                   "Prince William",
+                  "Indianapolis_Innovation",
+                  "Portland",
+                  "Baltimore County")
+
+#takes indy innovation out
+school_file_list <- c("Boulder",
+                   "Cleveland",
+                   "Columbus",
+                   "Denver",
+                    "Detroit",
+                   "Greenville",
+                   "Hamilton",
+                   "Horry",
+                   "Indianapolis",
+                   "Prince William",
+                   "Portland",
+                   "Baltimore County")
+```
+
+## 1.2 Previous Cohort Variables
+
+```{r}
+#NOTE UPDATE ONCE COMP DATA IN PERM PLACE
+
+#1. Previous Cohort
+#Folder names
+raw_data_folder_path_previous <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2024%20Pilot/1.%20Data%20&%20Analysis%20-%20Secure/0.%20Comp%20Data%20Exports/"
+
+#file Names
+budgeted_positions_previous_cohort <- "FInal Merged Data for Comp Database.xlsx"
+school_file_previous_cohort <- "schools_merged_data_11.27.24.csv"
+
+#DATA DICTIONARY
+#File path
+data_dictionary_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/1.%20BB%20Resources%20&%20Admin/3.%20BB%20Methodology%20&%20Guidance"
+
+#File Names
+bb_data_dictionary_file <- "BB Data Dictionary.xlsx"
+
+```
+
+# Part 2: Clean up Previous Cohort Data
+
+## 2.1 Upload Data
+
+```{r a.bring in previous cohort data}
+#budgeted positions
+budgeted_positions_previous_cohort <- ers_read_sharepoint_local(folder_path = paste0(raw_data_folder_path_previous),
+                   file_name_with_extension = budgeted_positions_previous_cohort,
+                   skip_rows=0)
+
+#filter out excluded rows
+budgeted_positions_previous_cohort <- budgeted_positions_previous_cohort %>%
+ filter(is.na(`Exclude?`) | `Exclude?` != "Exclude")
+
+
+#schools
+schools_previous_cohort <- ers_read_sharepoint_local(folder_path = paste0(raw_data_folder_path_previous),
+                   file_name_with_extension = school_file_previous_cohort,
+                   skip_rows=0)
+```
+
+## 2.2 Column Mapping
+
+```{r}
+
+# Keep ERS names exactly as is - fill with NAs if missing
+budgeted_positions_previous_cohort <- budgeted_positions_previous_cohort %>% 
+  mutate(
+    # Project Info
+    H_record_ID  = H_record_id,
+    H_partner   = case_when(
+      H_partner  == "Indy" ~ "Indianapolis", 
+        TRUE ~ H_partner),
+    H_LEAID      = case_when(
+      H_partner == "Denver"     ~ "0803360",
+      H_partner == "Detroit"    ~ "2601103",
+      H_partner == "Hamilton"   ~ "4701590",
+      H_partner == "Palm Beach" ~ "1201500",
+      H_partner == "Indy"       ~ "1804770",
+      H_partner == "Jeff Co"    ~ "0804800",
+      TRUE ~ "need LEAID"  # keep existing if not matched
+    ),
+    H_project_year = as.character(H_project_year),
+    H_project      = "Budget Benchmarking 2024",
+
+    # FTE
+    D_employee_id = D_empl_id,
+    D_empl_fte    = NA_real_,  # use NA_character_ if this column is text
+
+    # account codes
+    D_activity_code        = NA_character_,
+    D_class_code           = NA_character_,
+    D_cost_center_code     = NA_character_,
+    D_fund_code            = NA_character_,
+    D_funct_code           = NA_character_,
+    D_dept_code            = NA_character_,
+    D_location_code        = NA_character_,
+    D_position_type_code   = NA_character_,
+    D_position_title_code  = NA_character_,
+    D_object_code          = NA_character_,
+    D_program_code         = NA_character_,
+    D_project_code         = NA_character_,
+
+    # account descriptions 
+    D_activity_desc        = D_activity_desc,
+    D_allocation_desc      = D_allocation,
+    D_class_desc           = D_class_code_desc,
+    D_cost_center_desc     = D_cost_center, 
+    D_fund_desc            = D_fund_code_desc,
+    D_funct_desc           = D_funct_code_desc,
+    D_dept_desc            = D_dept_code_desc,
+    D_location_desc        = D_location_desc,
+    D_position_type_desc   = NA_character_, 
+    D_position_title_desc  = D_position_title,
+    D_object_desc          = D_object_code_desc,
+    D_program_desc         = D_program_desc,
+    D_project_desc         = D_project_code_desc,
+
+    # FTE calcs (kept as-is)
+    M_fte_adjusted = as.numeric(M_fte_adjusted),
+    M_fte_500      = as.numeric(M_fte_500),
+
+    # coding fields
+    C_operating_status_final = C_op_status,
+    C_reporting_final        = C_reporting,
+    C_position_type_final    = C_position_type_final,
+    C_function_final         = C_function_final,
+    C_student_type_final     = C_student_type_final,
+    C_prek_expense_final     = C_prek_final,
+    C_sharing_final          = C_sharing_final,
+
+    .keep = "none"
+  ) %>%
+  select(where(~ !all(is.na(.x))))
+
+```
+
+## 2.3 Aggregate School Metrics
+
+```{r}
+
+school_metrics_aggregated_previous <- schools_previous_cohort |>
+  group_by(H_partner) |>
+  summarise(
+    H_district_enrollment = sum(D_enrollment_total[Alternative_flag == "Neighborhood"], na.rm = TRUE),
+    H_schools_enrollment = sum(D_enrollment_total[Alternative_flag == "Neighborhood"], na.rm = TRUE),
+    H_gen_ed_enrollment = sum(D_gen_ed_enrollment[Alternative_flag == "Neighborhood"], na.rm = TRUE),
+    H_special_ed_enrollment = sum(D_swd_total[Alternative_flag == "Neighborhood"], na.rm = TRUE),
+    H_frl_enrollment = sum(D_frl_total[Alternative_flag == "Neighborhood"], na.rm = TRUE),
+    H_ell_enrollment = sum(D_ell_total[Alternative_flag == "Neighborhood"], na.rm = TRUE),
+    H_school_count = n_distinct(D_location_code[Alternative_flag == "Neighborhood"])
+  )
+```
+
+## 2.4 Join to Agg School to Position Data
+
+```{r}
+
+# Standardize H_partner names in school_metrics_aggregated_previous
+school_metrics_aggregated_previous <- school_metrics_aggregated_previous |>
+  mutate(H_partner = trimws(H_partner),
+         H_partner = case_when(H_partner == "Indy" ~ "Indianapolis", 
+                               TRUE ~ H_partner))
+
+
+budgeted_positions_previous_cohort <- budgeted_positions_previous_cohort %>%
+  left_join(school_metrics_aggregated_previous, 
+            by = "H_partner")
+```
+
+# Part 3: Clean Up Current Cohort Data
+
+## 3.1 Bring in Budget Data
+
+```{r}
+#brings in 2025 data and stack it all
+budgeted_positions_list <- district_list %>%
+  set_names() %>%
+  map(~ ers_read_sharepoint_local(
+    folder_path = raw_data_folder_path_current,
+    file_name_with_extension = paste0(.x, "_Homebase.xlsx"),
+    sheet_name = "Budgeted Positions",
+    skip_rows = 5
+  ) %>%
+    mutate(
+      district     = .x,
+      H_record_ID  = as.character(H_record_ID)  #  force character
+      
+    ))
+
+
+# check one
+names(budgeted_positions_list)
+glimpse(budgeted_positions_list$Boulder)
+
+```
+
+## 3.2 Stack Current Cohort Data
+
+```{r}
+#stack the Data
+budgeted_positions_current_cohort <- bind_rows(budgeted_positions_list)
+
+budgeted_positions_current_cohort <- budgeted_positions_current_cohort %>% 
+  mutate(
+    D_empl_fte = as.numeric(D_empl_fte),
+    M_fte_adjusted = as.numeric(M_fte_adjusted)
+  )
+
+```
+
+## 3.3 Clean up column Names
+
+```{r}
+# rename columns
+budgeted_positions_current_cohort <- budgeted_positions_current_cohort %>% 
+  rename(H_partner = H_district)
+```
+
+## 3.4 Bring in Current School data
+
+```{r}
+
+safe_read_sharepoint <- possibly(
+  function(...) ers_read_sharepoint(...),
+  otherwise = tibble() # returns empty tibble if file not found
+)
+
+#brings in current school and stack it all
+
+schools_list <- school_file_list %>%
+  set_names() %>%
+  map(~ ers_read_sharepoint_local(
+    folder_path = "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/1.%20Data%20Processed",
+    file_name_with_extension = paste0(.x, "_schools_processed.csv")
+  ) %>%
+    mutate(
+      district     = .x,
+      H_record_ID  = as.character(H_record_ID)  #  force character
+    ))
+
+# check one
+names(schools_list)
+glimpse(schools_list$Boulder)
+```
+
+## 3.6 Stack the Schools Data
+
+```{r}
+#update data types
+schools_list <- map(schools_list, ~ .x %>%
+  mutate(
+    across(
+      .cols = setdiff(names(.x), names(.x)[str_detect(names(.x), "_pct|_total|_gen")]),
+      as.character
+    )
+  )
+)
+
+#stack it
+schools_current_cohort <- bind_rows(schools_list)
+
+#clean up school flag
+schools_current_cohort<- schools_current_cohort %>%
+mutate(C_school_flag = case_when(C_school_flag == "Include: ALL" ~ "Include: All",
+                                 TRUE ~ C_school_flag)) %>%
+rename(H_partner = H_district)
+
+
+```
+
+## 3.7 Aggregate School Metrics
+
+```{r}
+
+school_metrics_aggregated <- schools_current_cohort |>
+  group_by(H_partner) |>
+  summarise(
+    H_district_enrollment = sum(D_enrollment_total[C_school_flag != "Exclude"], na.rm = TRUE),
+    H_schools_enrollment = sum(D_enrollment_total[C_school_flag == "Include: All"], na.rm = TRUE),
+    H_gen_ed_enrollment = sum(C_gen_ed[C_school_flag == "Include: All"],na.rm = TRUE),
+    H_special_ed_enrollment = sum(D_swd_total[C_school_flag == "Include: All"], na.rm = TRUE),
+    H_frl_enrollment = sum(D_frl_total[C_school_flag == "Include: All"], na.rm = TRUE),
+    H_ell_enrollment = sum(D_ell_total[C_school_flag == "Include: All"], na.rm = TRUE),
+    H_school_count = n_distinct(D_location_code[C_school_flag == "Include: All"])
+  )
+
+```
+
+## 3.7.1 Special Metrics for Indy
+
+```{r}
+
+indy_data <- schools_current_cohort %>% filter(
+  H_partner == "Indianapolis"
+)
+
+indy_enrollment_total <- indy_data %>% 
+  filter(C_school_flag_reason != "Exclude") %>% 
+  summarise(total_enrollment = sum(D_enrollment_total)) %>% 
+  pull(total_enrollment)
+
+indy_enrollment_lea <- indy_data %>% 
+  filter(C_school_flag_reason %in% c("Neighborhood", "In-LEA Innovation")) %>% 
+  summarise(total_enrollment = sum(D_enrollment_total)) %>% 
+  pull(total_enrollment)
+
+indy_enrollment_buildings <- indy_data %>% 
+  filter(C_school_flag_reason %in% c("Neighborhood", "In-LEA Innovation", "Buildings")) %>% 
+  summarise(total_enrollment = sum(D_enrollment_total)) %>% 
+  pull(total_enrollment)
+
+
+indy_schools <- indy_data %>% 
+  filter(C_school_flag_reason %in% c("Neighborhood", "In-LEA Innovation")) %>% 
+  summarise(total_count = n_distinct(D_location_code)) %>% 
+  pull(total_count)
+
+
+```
+
+## 3.8 Merge Schools Data with Position Data
+
+```{r}
+budgeted_positions_current_cohort <- budgeted_positions_current_cohort %>%
+  left_join(school_metrics_aggregated, 
+            by = "H_partner")
+         
+```
+
+# Part 4: Combine Years
+
+## 4.1 Stack All Years!
+
+```{r}
+#clean up record id data type
+budgeted_positions_previous_cohort <-  budgeted_positions_previous_cohort %>%
+    mutate(H_record_ID = paste0(as.character(H_record_ID),H_project_year))
+
+#do that stack
+budgeted_positions_all_years <- bind_rows(budgeted_positions_current_cohort,budgeted_positions_previous_cohort)
+```
+
+```{r}
+
+indy_2024 <- budgeted_positions_all_years %>% 
+  filter(H_partner == "Indianapolis") %>% 
+  filter(H_project_year == "2024")
+
+indy_2024 <- indy_2024 %>%
+    mutate(M_fte_500 = M_fte_500,
+           M_fte_10K = M_fte_500 * 20,
+           M_fte_per_school =  M_fte_adjusted/H_school_count,
+           M_fte_per_student =  M_fte_500 / 500,
+           M_fte_gen_ed = M_fte_adjusted/H_gen_ed_enrollment,
+           M_fte_sped =  M_fte_adjusted/H_special_ed_enrollment)
+
+
+```
+
+## 4.2 Calculate FTE Metrics
+
+```{r}
+budgeted_positions_all_years <- budgeted_positions_all_years %>%
+    mutate(M_fte_500 = M_fte_adjusted/H_schools_enrollment *500,
+           M_fte_10K = M_fte_adjusted/H_district_enrollment *10000,
+           M_fte_per_school =  M_fte_adjusted/H_school_count,
+           M_fte_per_student =  M_fte_adjusted/H_schools_enrollment,
+           M_fte_gen_ed = M_fte_adjusted/H_gen_ed_enrollment,
+           M_fte_sped =  M_fte_adjusted/H_special_ed_enrollment)
+```
+
+
+
+## 4.3 Bring in Use Crosswalk
+
+```{r}
+budgeted_positions_all_years <- budgeted_positions_all_years %>%
+#select(-C_use) %>%
+mutate(C_function_final = case_when(C_function_final == "Curriculum & Development" ~ "Curriculum Development",
+                                    TRUE ~ C_function_final))
+#bring data dictionary
+bb_data_dictionary <- ers_read_sharepoint_local(folder_path = data_dictionary_folder_path,
+                   file_name_with_extension = bb_data_dictionary_file,
+                   skip_rows=4)
+```
+
+```{r}
+#left join
+budgeted_positions_all_years <- budgeted_positions_all_years %>%
+  left_join(bb_data_dictionary, by = c("C_function_final" = "Accepted Value")) %>%
+  select(-Column) %>%
+    rename(C_use = Use)
+```
+
+```{r}
+indy_2024 <- indy_2024 %>%
+  left_join(bb_data_dictionary, by = c("C_function_final" = "Accepted Value")) %>%
+  select(-Column) %>%
+    rename(C_use = Use)
+
+```
+
+
+### 4.2.1 Calculate metrics for Indy
+
+```{r}
+
+indy_budget_data <- budgeted_positions_all_years %>% 
+  filter(H_partner == "Indianapolis") %>% 
+  filter(H_project_year == "2025")
+
+indy_budget_data <- indy_budget_data %>% 
+  mutate(M_fte_500 = case_when(
+    C_use %in% c("Instruction") ~ M_fte_adjusted / indy_enrollment_lea * 500,
+    C_use %in% c("Pupil Services & Enrichment", "ISPG") ~ M_fte_adjusted / indy_enrollment_lea * 500,
+    C_function_final %in% c("School Administration") ~ M_fte_adjusted / indy_enrollment_lea * 500,
+    C_function_final %in% c("School Supervision") ~ M_fte_adjusted / indy_enrollment_lea * 500,
+    
+    C_function_final %in% c("Facilities & Maintenance", "Security & Safety") ~ M_fte_adjusted / indy_enrollment_buildings * 500,
+    C_function_final %in% c("Research & Accountability", "Student Assignment") ~ M_fte_adjusted / indy_enrollment_buildings * 500,
+    C_function_final %in% c("Human Resources", "Data Processing & Information Services", "Legal") ~ M_fte_adjusted / indy_enrollment_buildings * 500,
+    
+    C_function_final %in% c("Food Services") ~ M_fte_adjusted / indy_enrollment_buildings * 500,
+    
+    C_function_final %in% c("Student Transportation") ~ M_fte_adjusted / indy_enrollment_buildings * 500,
+    
+    
+    C_function_final %in% c("Governance", "Communications") ~ M_fte_adjusted / indy_enrollment_total * 500,
+    C_function_final %in% c("Finance, Budget, Purchasing & Distribution", "Facilities Planning") ~ M_fte_adjusted / indy_enrollment_total * 500,
+    
+    # Flag for missing functions
+    TRUE ~ -1
+  )
+  
+  )
+
+
+indy_budget_data <- indy_budget_data %>% 
+  mutate(M_fte_10K = M_fte_500 * 20,
+         M_fte_per_student = M_fte_500 / 500,
+         M_fte_per_school = M_fte_adjusted / indy_schools
+  )
+
+
+
+```
+
+```{r}
+
+
+without_indy <- budgeted_positions_all_years %>% 
+  filter(H_partner != "Indianapolis")
+
+
+budgeted_positions_all_years <- rbind(without_indy, indy_budget_data, indy_2024)
+
+```
+
+## 4.5 Create Exclusion Flag
+
+```{r}
+#exclude flag
+budgeted_positions_all_years <- budgeted_positions_all_years |>
+  mutate(
+    C_exclusion_flag = case_when(
+      C_operating_status_final != "PreK-12 Operating" ~ "Exclude",
+      C_prek_expense_final == "PreK" ~ "Exclude",
+      C_use == "O&M" ~ "Exclude",
+      C_position_type_final == "Substitute" ~ "Exclude",
+      TRUE ~ "Include"
+    ),
+
+ #exclude flag reason
+    C_exclusion_flag_reason = case_when(
+      C_operating_status_final != "PreK-12 Operating" ~ "Not PreK-12 Operating",
+      C_prek_expense_final == "PreK" ~ "PreK Expense",
+      C_use == "O&M" ~ "O&M Use",
+      C_position_type_final == "Substitute" ~ "Substitute",
+      TRUE ~ "Included"
+    )
+  )
+budgeted_positions_all_years |> count(C_exclusion_flag_reason)
+```
+
+# Part 5: Normalize Text Columns
+
+## 5.1 Create the Function
+
+```{r}
+#this functions removes extra spaces, weird characters, etc. so that text will be exported cleanly
+clean_string <- function(x, flatten_newlines = TRUE) {
+  y <- suppressWarnings(as.character(x))
+  y <- str_replace_all(y, "\u00A0", " ")   # NBSP
+  y <- str_replace_all(y, "\u200B", "")    # zero-width space
+  y <- stringi::stri_replace_all_regex(y, "[\\p{Cc}&&[^\\t\\n]]", "")
+  if (flatten_newlines) y <- str_replace_all(y, "\\r?\\n+", " ")
+  y <- str_squish(y)
+  y
+}
+
+clean_text_cols <- function(df, flatten_newlines = TRUE) {
+  df %>%
+    mutate(across(
+      where(is.character),
+      ~ clean_string(.x, flatten_newlines = flatten_newlines)
+    ))
+}
+
+normalize_keys <- function(df,
+                           partner_col = "H_partner",
+                           id_cols = c("H_partner", "H_LEAID")) {
+  out <- df
+  if (partner_col %in% names(out)) {
+    out[[partner_col]] <- toupper(clean_string(out[[partner_col]]))
+  }
+  for (c in id_cols[id_cols %in% names(out)]) {
+    out[[c]] <- clean_string(out[[c]])
+  }
+  out
+}
+
+####
+prep_for_power_query <- function(df,
+                                 partner_col = "H_partner",
+                                 id_cols = c("H_partner", "H_LEAID"),
+                                 flatten_newlines = TRUE) {
+  df %>%
+    clean_text_cols(flatten_newlines = flatten_newlines) %>%
+    normalize_keys(partner_col = partner_col, id_cols = id_cols)
+}
+```
+
+## 5.2 Run the Function
+
+```{r}
+budgeted_positions_clean <- budgeted_positions_all_years %>%
+  prep_for_power_query(partner_col = "H_partner",
+                       id_cols = c("H_partner", "H_LEAID"))
+
+schools_current_cohort <- schools_current_cohort %>%
+  prep_for_power_query(partner_col = "H_partner",
+                       id_cols = c("H_partner", "H_LEAID"))
+
+```
+
+## 5.3 Merge Schools Data
+
+```{r}
+
+# Merge schools onto budgeted positions table
+ budgeted_positions_merge<- budgeted_positions_clean |>
+  left_join(schools_current_cohort %>%
+            select(H_partner, 
+                   H_project_year, 
+                   D_location_code,
+                   D_enrollment_total,
+                   C_school_flag,
+                   C_school_flag_reason,
+                   C_school_level,
+                   C_school_level_mapped,
+                   C_school_size,
+                   M_frl_quartile_flag_sized
+                  )
+            , by = c("H_partner", "H_project_year", "D_location_code"))
+
+#rename columns
+budgeted_positions_merge<-budgeted_positions_merge %>%
+rename(S_enrollment_total = D_enrollment_total,
+       S_school_level = C_school_level,
+       S_school_level_mapped = C_school_level_mapped,
+       S_school_size = C_school_size,
+       S_school_poverty = M_frl_quartile_flag_sized)
+
+#clean up columns
+budgeted_positions_merge<-budgeted_positions_merge %>%
+  mutate(
+    S_school_level = case_when(is.na(S_school_level) ~ "Non-School", TRUE ~ as.character(S_school_level)),
+    S_school_level_mapped = case_when(is.na(S_school_level_mapped) ~ "Non-School", TRUE ~ as.character(S_school_level_mapped)),
+    S_school_size = case_when(is.na(S_school_size) ~ "Non-School", TRUE ~ as.character(S_school_size)),
+    S_school_poverty = case_when(is.na(S_school_poverty) ~ "Non-School", TRUE ~ as.character(S_school_poverty)),
+      C_school_flag = case_when(is.na(C_school_flag) ~ "Non-School", TRUE ~ as.character(C_school_flag)),
+        C_school_flag_reason = case_when(is.na(C_school_flag_reason) ~ "Non-School", TRUE ~ as.character(C_school_flag_reason)),
+  )
+
+
+# Anti-join: D_location_codes in budgeted_positions_clean not matched in schools_previous_cohort
+unmatched_in_positions <- budgeted_positions_merge |>
+  filter(C_reporting_final == "School" & H_project_year == "2025")|>
+  anti_join(schools_current_cohort, by = c("H_partner", "H_project_year", "D_location_code")) |>
+  select(D_location_code, D_location_desc, H_partner,C_exclusion_flag) |>
+  distinct()
+
+
+# Anti-join: D_location_codes in schools_previous_cohort not matched in budgeted_positions_clean
+unmatched_in_school <- schools_current_cohort |>
+  anti_join(budgeted_positions_merge, by = c("H_partner", "H_project_year", "D_location_code")) |>
+  select(D_location_code, D_location_desc, H_partner, C_school_flag_reason, C_school_flag)
+
+# Combine both sets of unmatched codes
+unmatched_codes <- bind_rows(
+  unmatched_in_positions |> mutate(source = "budgeted_positions_merge"),
+  unmatched_in_school |> mutate(source = "schools_current_cohort")
+)
+
+unmatched_codes |> glimpse()
+
+nrow(budgeted_positions_clean)
+nrow(budgeted_positions_merge)
+ncol(budgeted_positions_clean)
+ncol(budgeted_positions_merge)
+
+```
+
+# Part 6: Final Clean ups
+
+## 6.1 Coding Fixes
+
+### Detroit fixes
+
+```{r}
+
+#Detroit Location Fixes
+budgeted_positions_merge <- budgeted_positions_merge %>%
+  mutate(D_location_code = case_when(H_partner == "DETROIT"  & D_location_desc == "Pulaski Elementary-Middle" ~ "031300",
+    TRUE ~ D_location_code
+  ))
+```
+
+### Denver Data Fixes
+
+```{r}
+#Move Denver Data Processing People/Clean Up to match 2024
+budgeted_positions_merge <- budgeted_positions_merge %>%
+  mutate(C_sharing_final = case_when(H_partner == "DENVER" & H_project_year == "2025" & D_position_title_desc == "PARTNER, SCHOOL TECHNOLOGY" ~ C_sharing_final,
+                                     TRUE ~ C_sharing_final),
+        C_function_final = case_when(H_partner == "DENVER" & H_project_year == "2025" & D_position_title_desc %in% c("Specialis II School Technology", "SPECIALIST II, SCHOOL TECHNOLOGY") ~ "Data Processing & Information Services",
+                                     TRUE ~ C_function_final),
+        C_use = case_when(H_partner == "DENVER" & H_project_year == "2025" & D_position_title_desc %in% c("Specialis II School Technology", "SPECIALIST II, SCHOOL TECHNOLOGY") ~ "Business Services",
+                                     TRUE ~ C_use))
+
+#check the changes 
+budgeted_positions_merge %>%
+  filter(H_partner == "DENVER" & H_project_year == "2025" & D_position_title_desc %in% c("Specialis II School Technology", "SPECIALIST II, SCHOOL TECHNOLOGY")) %>%
+  group_by(D_position_title_desc, C_function_final, C_use, C_sharing_final) %>%
+  summarize(total_fte = sum(M_fte_adjusted, na.rm = TRUE)) %>%
+  distinct()
+
+
+#update Occupational Therapist to "Other" for DETROIT
+budgeted_positions_merge <- budgeted_positions_merge %>%
+  mutate(C_function_final = case_when(H_partner == "DENVER" & H_project_year == "2024" &
+                                      C_function_final == "Development & Fundraising"  ~  "Finance, Budget, Purchasing & Distribution",
+                                     TRUE ~ C_function_final))
+
+  
+
+#check the changes
+budgeted_positions_merge %>%
+  filter(H_partner == "DENVER" & C_function_final == "Development & Fundraising") %>%
+  group_by(C_function_final, C_use) %>%
+  summarize(total_fte = sum(M_fte_adjusted, na.rm = TRUE)) %>%
+  distinct() %>%
+  print(n = Inf)
+
+```
+
+### Detroit Data Fixes
+
+```{r}
+#update Occupational Therapist to "Other" for DETROIT
+budgeted_positions_merge <- budgeted_positions_merge %>%
+  mutate(C_position_type_final = case_when(H_partner == "DETROIT" & 
+                                      C_function_final == "Human Resources" & 
+                                      C_position_type_final == "Occupational Therapist" ~ "Other",
+                                     TRUE ~ C_position_type_final))
+
+
+```
+
+### Guidance Counselor Fixes
+
+```{r}
+#Guidance Counselor Fixes
+budgeted_positions_merge <- budgeted_positions_merge %>%
+  mutate(C_function_final = case_when(C_position_type_final == "Guidance Counselor" & H_project_year == "2025" & S_school_level_mapped == "ES" ~ "Social & Emotional",
+  C_position_type_final == "Guidance Counselor" & H_project_year == "2025" & S_school_level_mapped == "SS" ~ "Career & Academic Counseling",
+                                     TRUE ~ C_function_final))
+
+#check the changes
+budgeted_positions_merge %>%
+  filter(C_position_type_final == "Guidance Counselor" & H_project_year == "2025") %>%
+  group_by(D_position_title_desc, C_function_final, C_use, C_sharing_final, S_school_level_mapped) %>%
+  summarize(total_fte = sum(M_fte_adjusted, na.rm = TRUE)) %>%
+  distinct() %>%
+  print(n = Inf)
+```
+
+### Shared Services for OT, PT, and Psychs
+
+```{r}
+
+#update coding
+budgeted_positions_merge <- budgeted_positions_merge %>%
+  mutate(C_sharing_final = case_when(C_position_type_final %in% c("Occupational Therapist", 
+                                                                  "Physical Therapist", 
+                                                                  "Psychologist") ~ "Shared Services",
+                                     TRUE ~ C_sharing_final))
+
+#update psychologists to Social & Emotional function
+budgeted_positions_merge <- budgeted_positions_merge %>%
+  mutate(C_function_final = case_when(C_position_type_final == "Psychologist" ~ "Social & Emotional",
+                                     TRUE ~ C_function_final))
+
+
+#check the changes
+budgeted_positions_merge %>%
+  filter(C_position_type_final %in% c("Occupational Therapist", 
+                                      "Physical Therapist", 
+                                      "Psychologist")) %>%
+  group_by(C_position_type_final, C_function_final, C_use, C_sharing_final) %>%
+  summarize(total_fte = sum(M_fte_adjusted, na.rm = TRUE)) %>%
+  distinct()
+
+```
+
+
+## 5.6 Clean up table and Reorder
+
+```{r}
+#select columns to keep
+budgeted_positions_final <- budgeted_positions_merge %>% 
+  select(
+    # Project Info
+    H_record_ID ,
+    H_partner,
+    H_LEAID,
+    H_project_year,
+    H_project , 
+    
+    #employee
+    D_employee_id,
+    D_empl_fte ,
+
+   # account descriptions 
+    D_activity_desc,
+    D_allocation_desc,
+    D_class_desc,
+    D_cost_center_desc, 
+    D_fund_desc,
+    D_funct_desc,
+    D_dept_desc,
+    D_location_code,
+    D_location_desc,
+    D_position_type_desc, 
+    D_position_title_desc,
+    D_object_desc,
+    D_program_desc,
+    D_project_desc,
+
+    # FTE calcs (kept as-is)
+    M_fte_adjusted,
+
+    # coding fields
+    C_operating_status_final,
+    C_reporting_final,
+    C_position_type_final,
+    C_use,
+    C_function_final ,
+    C_student_type_final,
+    C_prek_expense_final,
+    C_sharing_final,
+
+    #school Helpers
+    H_district_enrollment,
+    H_schools_enrollment,
+    H_gen_ed_enrollment,
+    H_special_ed_enrollment,
+    H_frl_enrollment,
+    H_ell_enrollment,
+    H_school_count,
+
+    #FTE per Student calcs
+    M_fte_500,
+    M_fte_10K,
+    M_fte_per_school,
+    M_fte_per_student,
+    M_fte_gen_ed,
+    M_fte_sped,
+
+    #School Level Columns
+    S_enrollment_total,
+    S_school_level,
+    S_school_level_mapped,
+    S_school_size,
+    S_school_poverty,
+
+     #exclusion columns
+    C_school_flag,
+    C_school_flag_reason,
+    C_exclusion_flag,
+    C_exclusion_flag_reason
+  )
+```
+
+# Part 6: Export Stacked Data
+
+```{r}
+processed_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/4.%20STACKED%20DATA"
+
+#budgeted positions
+ers_write_sharepoint(data = budgeted_positions_final,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "budgeted_positions_all_years.csv")
+
+#unmatched schools
+ers_write_sharepoint(data = unmatched_codes,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "unmatched_school_locations.csv")
+
+#schools file
+ers_write_sharepoint(data = schools_current_cohort,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "schools_current_cohort.csv")
+```
+
+```{r}
+
+denver <- budgeted_positions_all_years %>% 
+  filter(H_partner == "Denver") %>% 
+  select(c("D_position_title_desc", "C_function_manual", "C_function_1", "C_function_final", "C_sharing_manual", "C_sharing_final"))
+
+
+
+```
+## Analysis Check
+
+### Position Type and Function Discrepancies Across Years
+
+```{r}
+
+# Filter for Detroit and included positions
+districts_to_check <- c("DENVER", "INDIANAPOLIS", "HAMILTON")
+
+discrepancies_all <- lapply(districts_to_check, function(district) {
+  budgeted_positions_final %>%
+    filter(H_partner == district, C_exclusion_flag == "Include") %>%
+    group_by(D_position_title_desc) %>%
+    summarize(
+      position_type_2024 = paste(unique(C_position_type_final[H_project_year == "2024"]), collapse = "; "),
+      position_type_2025 = paste(unique(C_position_type_final[H_project_year == "2025"]), collapse = "; "),
+      function_2024 = paste(unique(C_function_final[H_project_year == "2024"]), collapse = "; "),
+      function_2025 = paste(unique(C_function_final[H_project_year == "2025"]), collapse = "; "),
+      total_fte_2024 = sum(M_fte_adjusted[H_project_year == "2024"], na.rm = TRUE),
+      total_fte_2025 = sum(M_fte_adjusted[H_project_year == "2025"], na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    filter(
+      position_type_2024 != position_type_2025 |
+      function_2024 != function_2025
+    ) %>%
+    filter(
+      !position_type_2024 %in% c("Excluded", "", NA),
+      !position_type_2025 %in% c("Excluded", "", NA),
+      !function_2024 %in% c("Excluded", "", NA),
+      !function_2025 %in% c("Excluded", "", NA)
+    ) %>%
+    mutate(district = district)
+})
+
+discrepancies_all <- bind_rows(discrepancies_all)
+discrepancies_all
+```
+
+### Sharing discrepancies across years
+
+```{r}
+sharing_discrepancies <- budgeted_positions_final %>%
+  filter(H_partner %in% districts_to_check, C_exclusion_flag == "Include", C_reporting_final == "Non-School") %>%
+  group_by(H_partner, D_position_title_desc) %>%
+  summarize(
+    function_2024 = paste(unique(C_function_final[H_project_year == "2024"]), collapse = "; "),
+    function_2025 = paste(unique(C_function_final[H_project_year == "2025"]), collapse = "; "),
+    sharing_2024 = paste(unique(C_sharing_final[H_project_year == "2024"]), collapse = "; "),
+    sharing_2025 = paste(unique(C_sharing_final[H_project_year == "2025"]), collapse = "; "),
+    total_fte_2024 = sum(M_fte_adjusted[H_project_year == "2024"], na.rm = TRUE),
+    total_fte_2025 = sum(M_fte_adjusted[H_project_year == "2025"], na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(sharing_2024 != sharing_2025) %>%
+  filter(
+    !sharing_2024 %in% c("Excluded", "", NA),
+    !sharing_2025 %in% c("Excluded", "", NA)
+  )
+
+  sharing_discrepancies <- bind_rows(sharing_discrepancies)
+sharing_discrepancies
+```
+
+### Columbus & Boulder Deep Dive
+
+```{r}
+#filter to columbus data and exp
+```
+
+### export analysis
+
+```{r}
+ers_write_sharepoint(data = discrepancies_all,
+                     folder_path = "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/5.%20Cohort-Wide%20Checks",
+                     file_name_with_extension = "position_discrepancies.csv")
+
+ers_write_sharepoint(data = sharing_discrepancies,
+                     folder_path = "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/Other/Budget%20Benchmarking/2025%20Cohort/1.%20Data%20&%20Analysis%20-%20Secure/5.%20Cohort-Wide%20Checks",
+                     file_name_with_extension = "function_sharing_discrepancies.csv")
+
+```
+
+```{r}
+
+sapply(budgeted_positions_final, class)
+
+
+```
